@@ -49,6 +49,26 @@ type View struct {
 	Label     string `json:"label"`
 	Status    string `json:"status"`
 	StartedAt int64  `json:"startedAt"` // unix milliseconds
+
+	// Live state fields — populated during subagent run (Issue #06).
+	Model         string    `json:"model"`
+	Effort        string    `json:"effort"`
+	ToolCalls     int       `json:"toolCalls"`
+	LastTool      string    `json:"lastTool"`
+	LastReasoning string    `json:"lastReasoning"` // rolling 200-char window
+	Usage         *UsageSummary `json:"usage"`
+	DependsOn     []string  `json:"dependsOn"`
+	Blocks        []string  `json:"blocks"`
+	ResultPreview string    `json:"resultPreview"`
+}
+
+// UsageSummary is a lightweight token/cost snapshot for job views.
+type UsageSummary struct {
+	InputTokens  int     `json:"inputTokens"`
+	OutputTokens int     `json:"outputTokens"`
+	CacheHit     int     `json:"cacheHit"`
+	CacheMiss    int     `json:"cacheMiss"`
+	CostEst      float64 `json:"costEst"`
 }
 
 // Result is one job's terminal (or current) state returned by Wait.
@@ -128,6 +148,17 @@ type Job struct {
 	artifactComplete bool
 	artifactErr      string
 	tombstone        bool
+
+		// Live state fields — populated during subagent run (Issue #06).
+		model         string
+		effort         string
+		toolCalls         string
+		lastTool         string
+		lastReasoning         string
+		usageSummary  *UsageSummary
+		dependsOn     []string
+		blocks     []string
+		resultPreview     []string
 }
 
 // Manager is the session's background-job table. It is safe for concurrent use.
@@ -1498,4 +1529,46 @@ func WithSession(ctx context.Context, parentSession string) context.Context {
 func SessionFromContext(ctx context.Context) string {
 	session, _ := ctx.Value(sessionCtxKey{}).(string)
 	return strings.TrimSpace(session)
+}
+
+// UpdateView applies fn to the job with the given id under the session.
+// The function runs under the job mutex so it is safe for multiple
+// goroutines (subagent goroutine writes, TUI reads). No-op if the
+// job is not found or has already finished.
+func (m *Manager) UpdateView(parentSession, id string, fn func(v *View)) {
+	m.mu.Lock()
+	j, ok := m.jobs[jobKey(parentSession, id)]
+	m.mu.Unlock()
+	if !ok {
+		return
+	}
+	j.mu.Lock()
+	if j.status != Running { j.mu.Unlock(); return }
+	v := View{
+		ID: j.ID, Kind: j.Kind, Label: j.Label,
+				out = append(out, View{
+					ID: j.ID, Kind: j.Kind, Label: j.Label,
+					Status: string(j.status), StartedAt: j.startedAt,
+					Model: j.model, Effort: j.effort, ToolCalls: j.toolCalls,
+					LastTool: j.lastTool, LastReasoning: j.lastReasoning,
+					Usage: j.usageSummary, DependsOn: j.dependsOn,
+					Blocks: j.blocks, ResultPreview: j.resultPreview,
+				})
+		Model: j.model, Effort: j.effort, ToolCalls: j.toolCalls,
+		LastTool: j.lastTool, LastReasoning: j.lastReasoning,
+		Usage: j.usageSummary, DependsOn: j.dependsOn,
+		Blocks: j.blocks, ResultPreview: j.resultPreview,
+	}
+	fn(&v)
+	// Write back the fields the caller may have changed
+	j.model = v.Model
+	j.effort = v.Effort
+	j.toolCalls = v.ToolCalls
+	j.lastTool = v.LastTool
+	j.lastReasoning = v.LastReasoning
+	j.usageSummary = v.Usage
+	j.dependsOn = v.DependsOn
+	j.blocks = v.Blocks
+	j.resultPreview = v.ResultPreview
+	j.mu.Unlock()
 }
