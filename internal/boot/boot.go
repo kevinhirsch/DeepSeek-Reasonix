@@ -612,7 +612,7 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 			keepPolicy,
 			taskModel, taskEffort, resolveSubagentProvider).
 			WithTranscripts(subagentStore, root, modelName, entry.Effort).
-			WithTranscriptIdentityResolver(subagentIdentity)
+			WithTranscriptIdentityResolver(subagentIdentity).WithIsDeepSeek(openai.IsDeepSeek(entry.BaseURL))
 	}
 	addTaskTool := func() string {
 		if taskToolAdded {
@@ -624,6 +624,7 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 		}
 		reg.Add(taskTool)
 		reg.Add(agent.NewParallelTasksTool(taskTool, reg))
+			reg.Add(agent.NewWorkflowTool(taskTool, reg))
 		return "enabled task."
 	}
 	addReadOnlyTaskTool := func() string {

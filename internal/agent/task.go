@@ -36,6 +36,8 @@ var subagentMetaTools = []string{
 	"task",
 	"read_only_task",
 	"parallel_tasks",
+	"workflow",
+	"send_to_subagent",
 	"run_skill",
 	"read_only_skill",
 	"read_skill",
@@ -178,6 +180,7 @@ type TaskTool struct {
 	baseModel           string
 	baseEffort          string
 	identityProfile     func(modelRef, effort string) (string, string)
+	isDeepSeek          bool
 }
 
 // NewTaskTool wires a task tool to the parent agent's environment so its
@@ -227,6 +230,11 @@ func (t *TaskTool) WithTranscripts(store *SubagentStore, workspaceRoot, baseMode
 
 func (t *TaskTool) WithTranscriptIdentityResolver(resolve func(modelRef, effort string) (string, string)) *TaskTool {
 	t.identityProfile = resolve
+	return t
+}
+
+func (t *TaskTool) WithIsDeepSeek(v bool) *TaskTool {
+	t.isDeepSeek = v
 	return t
 }
 
