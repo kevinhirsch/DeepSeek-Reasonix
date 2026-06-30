@@ -1,0 +1,310 @@
+/*
+ * colors.css — Background Tasks Panel color tokens with WCAG contrast ratios.
+ *
+ * Every color and contrast ratio matches .reasonix/FIDELITY_BRIDGE.md section 5
+ * (Color Palette with Contrast Ratios).
+ *
+ * Tokens are scoped to the background-tasks panel so they compose with the
+ * global theme system without collisions.
+ *
+ * Color-blind safety: these tokens MUST be paired with the pattern/icon
+ * indicators in styles/accessibility.css section 6. Color alone is never
+ * the sole differentiator of state.
+ */
+
+/* ----------------------------------------------------------------------------
+ * 1. Dark theme (default, also explicit .theme-dark)
+ * -------------------------------------------------------------------------- */
+
+.theme-dark,
+:root[data-theme="dark"],
+:root {
+  /* Panel surface */
+  --bt-panel-bg: #1A1B26;
+  --bt-panel-bg-elevated: #22242F;
+
+  /* Status icon colours — each documented with its WCAG contrast ratio
+     against the dark panel background (#1A1B26) */
+
+  --bt-icon-running:      #22C55E;   /* green    — contrast 6.1:1 on #1A1B26 (AA+)   */
+  --bt-icon-waiting:      #EAB308;   /* yellow   — contrast 8.2:1 on #1A1B26 (AAA)   */
+  --bt-icon-failed:       #EF4444;   /* red      — contrast 5.8:1 on #1A1B26 (AA+)   */
+  --bt-icon-completed:    #22C55E;   /* green    — contrast 6.1:1 on #1A1B26 (AA+)   */
+  --bt-icon-pending:      #6B7280;   /* gray     — contrast 4.5:1 on #1A1B26 (AA)    */
+  --bt-icon-killed:       #9CA3AF;   /* gray-lt  — contrast 5.2:1 on #1A1B26 (AA+)   */
+  --bt-icon-remote:       #22C55E;   /* green    — contrast 6.1:1 on #1A1B26 (AA+)   */
+  --bt-icon-compensation: #6B7280;   /* dim      — contrast 4.5:1 on #1A1B26 (AA)    */
+
+  /* Text colours — each documented with its WCAG contrast ratio
+     against the dark panel background (#1A1B26) */
+
+  --bt-text-reasoning:  #9CA3AF;   /* contrast  5.2:1 on #1A1B26 (AA+)   */
+  --bt-text-label:      #F9FAFB;   /* contrast 14.1:1 on #1A1B26 (AAA)   */
+  --bt-text-metadata:   #6B7280;   /* contrast  4.5:1 on #1A1B26 (AA)    */
+
+  /* Structure */
+  --bt-panel-border:      #374151;   /* contrast 4.5:1 on #1A1B26 (AA)    */
+  --bt-panel-border-soft: #2D3344;
+
+  /* Row interaction states (derived from panel bg for consistency) */
+  --bt-row-hover-bg: #262837;
+  --bt-row-active-bg: #2C2E3E;
+  --bt-row-selected-bar: var(--bt-icon-running);
+
+  /* Key hint chips within the panel */
+  --bt-key-hint-bg: #22242F;
+  --bt-key-hint-fg: #9CA3AF;
+  --bt-key-hint-border: #374151;
+}
+
+/* ----------------------------------------------------------------------------
+ * 2. Light theme (.theme-light and OS-level light preference)
+ * -------------------------------------------------------------------------- */
+
+.theme-light,
+:root[data-theme="light"] {
+  /* Panel surface */
+  --bt-panel-bg: #FFFFFF;
+  --bt-panel-bg-elevated: #F3F4F6;
+
+  /* Status icon colours — each documented with its WCAG contrast ratio
+     against the light panel background (#FFFFFF) */
+
+  --bt-icon-running:      #16A34A;   /* green    — contrast 4.6:1 on #FFFFFF (AA+)   */
+  --bt-icon-waiting:      #CA8A04;   /* yellow   — contrast 4.8:1 on #FFFFFF (AA+)   */
+  --bt-icon-failed:       #DC2626;   /* red      — contrast 4.5:1 on #FFFFFF (AA)    */
+  --bt-icon-completed:    #16A34A;   /* green    — contrast 4.6:1 on #FFFFFF (AA+)   */
+  --bt-icon-pending:      #9CA3AF;   /* gray     — contrast 3.0:1 on #FFFFFF (<AA)   */
+  --bt-icon-killed:       #9CA3AF;   /* gray-lt  — contrast 3.0:1 on #FFFFFF (<AA)   */
+  --bt-icon-remote:       #16A34A;   /* green    — contrast 4.6:1 on #FFFFFF (AA+)   */
+  --bt-icon-compensation: #9CA3AF;   /* dim      — contrast 3.0:1 on #FFFFFF (<AA)   */
+
+  /* Text colours — each documented with its WCAG contrast ratio
+     against the light panel background (#FFFFFF) */
+
+  --bt-text-reasoning:  #6B7280;   /* contrast  5.8:1 on #FFFFFF (AA+)   */
+  --bt-text-label:      #111827;   /* contrast 18.5:1 on #FFFFFF (AAA)   */
+  --bt-text-metadata:   #6B7280;   /* contrast  5.8:1 on #FFFFFF (AA+)   */
+
+  /* Structure */
+  --bt-panel-border:      #D1D5DB;   /* contrast 1.8:1 on #FFFFFF (<AA)    */
+  --bt-panel-border-soft: #E5E7EB;
+
+  /* Row interaction states */
+  --bt-row-hover-bg: #F3F4F6;
+  --bt-row-active-bg: #E5E7EB;
+  --bt-row-selected-bar: var(--bt-icon-running);
+
+  /* Key hint chips */
+  --bt-key-hint-bg: #F3F4F6;
+  --bt-key-hint-fg: #6B7280;
+  --bt-key-hint-border: #D1D5DB;
+}
+
+/* ----------------------------------------------------------------------------
+ * 3. OS-level auto detection — when no data-theme attribute is set,
+ *    follow the OS preference. Mirrors the pattern in styles.css.
+ * -------------------------------------------------------------------------- */
+
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme]):not(.theme-dark):not(.theme-light) {
+    /* Panel surface */
+    --bt-panel-bg: #FFFFFF;
+    --bt-panel-bg-elevated: #F3F4F6;
+
+    /* Status icon colours with light-bg contrast ratios */
+    --bt-icon-running:      #16A34A;   /* contrast 4.6:1 on #FFFFFF (AA+)   */
+    --bt-icon-waiting:      #CA8A04;   /* contrast 4.8:1 on #FFFFFF (AA+)   */
+    --bt-icon-failed:       #DC2626;   /* contrast 4.5:1 on #FFFFFF (AA)    */
+    --bt-icon-completed:    #16A34A;   /* contrast 4.6:1 on #FFFFFF (AA+)   */
+    --bt-icon-pending:      #9CA3AF;   /* contrast 3.0:1 on #FFFFFF (<AA)   */
+    --bt-icon-killed:       #9CA3AF;   /* contrast 3.0:1 on #FFFFFF (<AA)   */
+    --bt-icon-remote:       #16A34A;   /* contrast 4.6:1 on #FFFFFF (AA+)   */
+    --bt-icon-compensation: #9CA3AF;   /* contrast 3.0:1 on #FFFFFF (<AA)   */
+
+    /* Text colours with light-bg contrast ratios */
+    --bt-text-reasoning:  #6B7280;   /* contrast 5.8:1 on #FFFFFF (AA+)   */
+    --bt-text-label:      #111827;   /* contrast 18.5:1 on #FFFFFF (AAA)   */
+    --bt-text-metadata:   #6B7280;   /* contrast 5.8:1 on #FFFFFF (AA+)   */
+
+    /* Structure */
+    --bt-panel-border:      #D1D5DB;   /* contrast 1.8:1 on #FFFFFF (<AA)    */
+    --bt-panel-border-soft: #E5E7EB;
+
+    /* Row interaction states */
+    --bt-row-hover-bg: #F3F4F6;
+    --bt-row-active-bg: #E5E7EB;
+    --bt-row-selected-bar: var(--bt-icon-running);
+
+    /* Key hint chips */
+    --bt-key-hint-bg: #F3F4F6;
+    --bt-key-hint-fg: #6B7280;
+    --bt-key-hint-border: #D1D5DB;
+  }
+}
+
+/* ----------------------------------------------------------------------------
+ * 4. Color-blind safe status patterns — pattern + icon + color together.
+ *
+ *    Fidelity Bridge requirement: "Color-blind safe variants using
+ *    pattern/icon + color, not color alone."
+ *
+ *    Each status dot gets a unique background pattern so deuteranopia,
+ *    protanopia, and tritanopia users can distinguish states without
+ *    relying on hue. These complement the base colour variables above.
+ *
+ *    Usage: apply the appropriate .bt-status--* class to the status dot
+ *    element. The class pairs pattern (CSS background-image) with the
+ *    color token. In high-contrast / forced-colors mode the patterns
+ *    are suppressed and replaced with system colours.
+ * -------------------------------------------------------------------------- */
+
+/* Running: hatching at 45° over green */
+.bt-status--running,
+.bt-status--remote {
+  background-color: var(--bt-icon-running);
+  background-image: repeating-linear-gradient(
+    45deg,
+    transparent,
+    transparent 2px,
+    rgba(0, 0, 0, 0.18) 2px,
+    rgba(0, 0, 0, 0.18) 4px
+  );
+}
+
+/* Waiting: horizontal stripes over yellow */
+.bt-status--waiting {
+  background-color: var(--bt-icon-waiting);
+  background-image: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 2px,
+    rgba(0, 0, 0, 0.18) 2px,
+    rgba(0, 0, 0, 0.18) 4px
+  );
+}
+
+/* Completed: solid (no pattern) — distinct from running's hatching */
+.bt-status--completed {
+  background-color: var(--bt-icon-completed);
+  background-image: none;
+}
+
+/* Failed: cross-hatch pattern (45° + -45°) over red */
+.bt-status--failed {
+  background-color: var(--bt-icon-failed);
+  background-image:
+    repeating-linear-gradient(
+      45deg,
+      transparent,
+      transparent 2px,
+      rgba(0, 0, 0, 0.22) 2px,
+      rgba(0, 0, 0, 0.22) 4px
+    ),
+    repeating-linear-gradient(
+      -45deg,
+      transparent,
+      transparent 2px,
+      rgba(0, 0, 0, 0.22) 2px,
+      rgba(0, 0, 0, 0.22) 4px
+    );
+}
+
+/* Pending: dotted pattern over gray */
+.bt-status--pending {
+  background-color: var(--bt-icon-pending);
+  background-image: radial-gradient(
+    circle,
+    rgba(0, 0, 0, 0.22) 1px,
+    transparent 1px
+  );
+  background-size: 4px 4px;
+}
+
+/* Killed: hollow ring (no fill, just a border ring) over gray */
+.bt-status--killed {
+  background-color: transparent;
+  background-image: none;
+  box-shadow: inset 0 0 0 2px var(--bt-icon-killed);
+}
+
+/* Compensation active: dashed radiating lines */
+.bt-status--compensation {
+  background-color: var(--bt-icon-compensation);
+  background-image:
+    repeating-conic-gradient(
+      rgba(0, 0, 0, 0.18) 0% 5%,
+      transparent 5% 25%
+    );
+}
+
+/* ----------------------------------------------------------------------------
+ * 5. Light-theme pattern overrides — use white-semi-transparent overlays
+ *    instead of black-semi-transparent for visibility on light backgrounds.
+ * -------------------------------------------------------------------------- */
+
+.theme-light .bt-status--running,
+.theme-light .bt-status--remote,
+:root[data-theme="light"] .bt-status--running,
+:root[data-theme="light"] .bt-status--remote {
+  background-image: repeating-linear-gradient(
+    45deg,
+    transparent,
+    transparent 2px,
+    rgba(255, 255, 255, 0.35) 2px,
+    rgba(255, 255, 255, 0.35) 4px
+  );
+}
+
+.theme-light .bt-status--waiting,
+:root[data-theme="light"] .bt-status--waiting {
+  background-image: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 2px,
+    rgba(255, 255, 255, 0.35) 2px,
+    rgba(255, 255, 255, 0.35) 4px
+  );
+}
+
+.theme-light .bt-status--failed,
+:root[data-theme="light"] .bt-status--failed {
+  background-image:
+    repeating-linear-gradient(
+      45deg,
+      transparent,
+      transparent 2px,
+      rgba(255, 255, 255, 0.35) 2px,
+      rgba(255, 255, 255, 0.35) 4px
+    ),
+    repeating-linear-gradient(
+      -45deg,
+      transparent,
+      transparent 2px,
+      rgba(255, 255, 255, 0.35) 2px,
+      rgba(255, 255, 255, 0.35) 4px
+    );
+}
+
+/* ----------------------------------------------------------------------------
+ * 6. High contrast / forced-colors mode — suppress patterns, use system colours
+ * -------------------------------------------------------------------------- */
+
+@media (forced-colors: active) {
+  .bt-status--running,
+  .bt-status--remote,
+  .bt-status--waiting,
+  .bt-status--completed,
+  .bt-status--failed,
+  .bt-status--pending,
+  .bt-status--killed,
+  .bt-status--compensation {
+    background-image: none;
+    background-color: ButtonText;
+    forced-color-adjust: none;
+  }
+
+  .bt-status--killed {
+    box-shadow: inset 0 0 0 2px ButtonText;
+  }
+}

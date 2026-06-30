@@ -64,7 +64,7 @@ function SkeletonRow() {
 
 export function RepoPicker({
   workspaceRoot,
-  onClose,
+  onClose: _onClose,
   onRepoOpened,
 }: {
   workspaceRoot: string;
@@ -283,7 +283,7 @@ export function RepoPicker({
                         {repo.fullName}
                       </span>
                       {repo.private && (
-                        <Lock size={12} className="repo-picker__private" title="Private" aria-label="Private repository" />
+                        <Lock size={12} className="repo-picker__private" aria-label="Private repository" />
                       )}
                       {repo.language && (
                         <span className={`repo-picker__badge ${langClass(repo.language)}`}>

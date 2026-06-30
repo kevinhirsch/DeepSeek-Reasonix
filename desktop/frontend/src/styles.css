@@ -9,6 +9,9 @@
  *    title bar); interactive children opt out with --wails-draggable: no-drag.
  */
 
+@import "./styles/animations.css";
+@import "./styles/colors.css";
+
 :root {
   color-scheme: dark;
 

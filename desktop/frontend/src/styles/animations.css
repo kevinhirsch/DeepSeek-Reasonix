@@ -1,0 +1,247 @@
+/*
+ * animations.css — Background Tasks Panel animation tokens and keyframes.
+ *
+ * Every animation matches the exact timing values from
+ * .reasonix/FIDELITY_BRIDGE.md section 4 (Animation & Timing Specification).
+ *
+ * CSS has no native spring() — the shake_on_reject animation approximates a
+ * damped harmonic oscillator (mass=2, stiffness=10) via keyframe stops.
+ */
+
+/* ----------------------------------------------------------------------------
+ * 1. Animation duration & easing tokens
+ * -------------------------------------------------------------------------- */
+
+:root {
+  /* Panel animation timings — exact values from the Fidelity Bridge spec */
+  --bt-anim-panel-appear: 200ms;
+  --bt-anim-row-insert:   150ms;
+  --bt-anim-row-collapse: 300ms;
+  --bt-anim-row-expand:   150ms;
+  --bt-anim-icon-pulse:   200ms;
+  --bt-anim-shake-reject: 300ms;
+
+  /* Easing curves matching the spec */
+  --bt-ease-out:       ease-out;
+  --bt-ease-in-out:    ease-in-out;
+  /* spring(2,10) approximated — linear keyframe stops carry the spring feel */
+}
+
+/* ----------------------------------------------------------------------------
+ * 2. @keyframes definitions
+ * -------------------------------------------------------------------------- */
+
+/* panel_appear — 200ms ease-out, triggered when the first subagent spawns.
+   Fades the panel in with a subtle upward slide. */
+@keyframes anim-panel-appear {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* row_insert — 150ms ease-out, triggered when a new subagent is added.
+   Slides the row in from the left with a fade. */
+@keyframes anim-row-insert {
+  from {
+    opacity: 0;
+    transform: translateX(-12px);
+    max-height: 0;
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+    max-height: 88px;
+  }
+}
+
+/* row_collapse — 300ms ease-out, triggered after a subagent completes + 2s delay.
+   Collapses the row height and fades it out. */
+@keyframes anim-row-collapse {
+  from {
+    opacity: 1;
+    max-height: 88px;
+    margin-top: 0;
+    margin-bottom: 0;
+    padding-top: 4px;
+    padding-bottom: 4px;
+  }
+  to {
+    opacity: 0;
+    max-height: 0;
+    margin-top: 0;
+    margin-bottom: 0;
+    padding-top: 0;
+    padding-bottom: 0;
+  }
+}
+
+/* row_expand — 150ms ease-out, triggered when peek is opened for a subagent.
+   Expands the row vertically to reveal reasoning detail. */
+@keyframes anim-row-expand {
+  from {
+    max-height: 40px;
+  }
+  to {
+    max-height: 240px;
+  }
+}
+
+/* icon_pulse — 200ms ease-in-out, triggered when the status line count changes.
+   A brief scale pulse on the status indicator. */
+@keyframes anim-icon-pulse {
+  0% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.25);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+/* shake_on_reject — 300ms spring(2,10) approximation, triggered on empty message
+   send. CSS has no native spring() function. The keyframe stops below approximate
+   a damped harmonic oscillator with mass=2 and stiffness=10 — two visible
+   oscillations with rapidly decaying amplitude, settling within 300ms. */
+@keyframes anim-shake-reject {
+  0% {
+    transform: translateX(0);
+  }
+  12.5% {
+    transform: translateX(-6px);
+  }
+  25% {
+    transform: translateX(5px);
+  }
+  37.5% {
+    transform: translateX(-4px);
+  }
+  50% {
+    transform: translateX(3px);
+  }
+  62.5% {
+    transform: translateX(-2px);
+  }
+  75% {
+    transform: translateX(1px);
+  }
+  87.5% {
+    transform: translateX(-0.5px);
+  }
+  100% {
+    transform: translateX(0);
+  }
+}
+
+/* ----------------------------------------------------------------------------
+ * 3. Utility classes — apply the animations
+ * -------------------------------------------------------------------------- */
+
+.animate-panel-appear {
+  animation: anim-panel-appear var(--bt-anim-panel-appear) var(--bt-ease-out) both;
+}
+
+.animate-row-insert {
+  animation: anim-row-insert var(--bt-anim-row-insert) var(--bt-ease-out) both;
+}
+
+.animate-row-collapse {
+  animation: anim-row-collapse var(--bt-anim-row-collapse) var(--bt-ease-out) both;
+}
+
+.animate-row-expand {
+  animation: anim-row-expand var(--bt-anim-row-expand) var(--bt-ease-out) both;
+}
+
+.animate-icon-pulse {
+  animation: anim-icon-pulse var(--bt-anim-icon-pulse) var(--bt-ease-in-out) both;
+}
+
+.animate-shake-reject {
+  animation: anim-shake-reject var(--bt-anim-shake-reject) linear both;
+}
+
+/* ----------------------------------------------------------------------------
+ * 4. Reduced motion — Fidelity Bridge spec: all animations → 0ms
+ * -------------------------------------------------------------------------- */
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-panel-appear,
+  .animate-row-insert,
+  .animate-row-collapse,
+  .animate-row-expand,
+  .animate-icon-pulse,
+  .animate-shake-reject {
+    animation-duration: 0ms;
+    animation-delay: 0ms;
+  }
+
+  /* Also collapse the timing tokens so any inline usage snaps to instant */
+  :root {
+    --bt-anim-panel-appear: 0ms;
+    --bt-anim-row-insert:   0ms;
+    --bt-anim-row-collapse: 0ms;
+    --bt-anim-row-expand:   0ms;
+    --bt-anim-icon-pulse:   0ms;
+    --bt-anim-shake-reject: 0ms;
+  }
+}
+
+/* ----------------------------------------------------------------------------
+ * 5. Responsive breakpoint tokens — Fidelity Bridge section 3
+ *
+ *    Terminal width   Layout
+ *    <40 cols          Degraded: single-line indicators only, no panel
+ *    40-59 cols        Compact: 1 line per subagent, truncated labels
+ *    60-79 cols        Standard: 2 lines per subagent, 100-char reasoning tail
+ *    80-119 cols       Full: 2 lines per subagent, 200-char reasoning tail
+ *    120+ cols         Wide: 2 lines per subagent, 400-char reasoning tail
+ *
+ *    The tokens below map terminal columns to CSS viewport widths.
+ *    Components read --bt-breakpoint to key layout decisions.
+ * -------------------------------------------------------------------------- */
+
+:root {
+  --bt-breakpoint: "standard"; /* default — overridden by media queries below */
+}
+
+/* Degraded: single-line indicators only, no panel */
+@media (max-width: 39ch) {
+  :root {
+    --bt-breakpoint: "degraded";
+  }
+}
+
+/* Compact: 1 line per subagent, truncated labels, no reasoning tail */
+@media (min-width: 40ch) and (max-width: 59ch) {
+  :root {
+    --bt-breakpoint: "compact";
+  }
+}
+
+/* Standard: 2 lines per subagent, 100-char reasoning tail */
+@media (min-width: 60ch) and (max-width: 79ch) {
+  :root {
+    --bt-breakpoint: "standard";
+  }
+}
+
+/* Full: 2 lines per subagent, 200-char reasoning tail, model/effort visible */
+@media (min-width: 80ch) and (max-width: 119ch) {
+  :root {
+    --bt-breakpoint: "full";
+  }
+}
+
+/* Wide: 2 lines per subagent, 400-char reasoning tail, cost, remote info */
+@media (min-width: 120ch) {
+  :root {
+    --bt-breakpoint: "wide";
+  }
+}

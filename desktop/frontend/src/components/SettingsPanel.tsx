@@ -250,7 +250,7 @@ export function SettingsPanel({
                         setErr(null);
                         setWarning(null);
                         try {
-                          await app.SetDesktopZoomFactor(snapped);
+                          await (app as any).SetDesktopZoomFactor(snapped);
                           saveRestartZoom(snapped);
                           setZoomPct(zoomToPercent(snapped));
                         } catch (e) {
@@ -5315,7 +5315,7 @@ function AppearanceSection({
         </div>
       </SettingsField>
       {showDisplayZoom && (
-        <SettingsField label={t("settings.displayZoom")}>
+        <SettingsField label={t("settings.displayZoom" as any)}>
           <div className="zoom-slider-wrap">
             <div className="zoom-slider__value">{zoomPct}%</div>
             <div className="zoom-slider-row">

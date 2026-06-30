@@ -1,13 +1,17 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
+	"reasonix/internal/netclient"
 	"reasonix/internal/prompt"
+	"reasonix/internal/provider"
 )
 
 func promptCommand(args []string) int {
@@ -30,9 +34,10 @@ func promptCommand(args []string) int {
 func promptEvalCommand(args []string) int {
 	fs := flag.NewFlagSet("prompt eval", flag.ContinueOnError)
 	role := fs.String("role", "", "Role to evaluate (explorer, reviewer, verifier, planner, executor)")
-	model := fs.String("model", "", "Model to use (default: configured default)")
+	model := fs.String("model", "", "Model to use (default: deepseek-v4-flash)")
 	scenariosFile := fs.String("scenarios", "", "Custom scenarios file (default: .reasonix/prompts/eval/<role>.json)")
 	outputJSON := fs.Bool("json", false, "Output results as JSON")
+	live := fs.Bool("live", false, "Use real DeepSeek API instead of mock provider")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -78,22 +83,60 @@ func promptEvalCommand(args []string) int {
 	promptText := prompt.LoadPrompt(*role, promptsDir,
 		fmt.Sprintf("You are a %s subagent. Complete the task concisely.", *role))
 
+	// Build a real provider when --live is passed.
+	var prov provider.Provider
+	if *live {
+		if *model == "" {
+			*model = "deepseek-v4-flash"
+		}
+		apiKey := os.Getenv("DEEPSEEK_API_KEY")
+		if apiKey == "" {
+			fmt.Fprintln(os.Stderr, "Error: --live requires DEEPSEEK_API_KEY environment variable to be set")
+			return 1
+		}
+
+		var err error
+		prov, err = provider.New("openai", provider.Config{
+			Name:    "deepseek-eval",
+			BaseURL: "https://api.deepseek.com",
+			Model:   *model,
+			APIKey:  apiKey,
+			Extra: map[string]any{
+				"api_key_env":        "DEEPSEEK_API_KEY",
+				"api_key_source":     "environment",
+				"thinking":           "",
+				"effort":             "high",
+				"reasoning_protocol": "deepseek",
+				"proxy_spec":         netclient.ProxySpec{Mode: netclient.ModeAuto},
+				"vision":             false,
+			},
+		})
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to create DeepSeek provider: %v\n", err)
+			return 1
+		}
+	}
+
 	fmt.Printf("Evaluating %s prompt...\n", *role)
 	fmt.Printf("  Scenarios: %d\n", len(suite.Scenarios))
 	fmt.Printf("  Model: %s\n", *model)
+	if *live {
+		fmt.Println("  Provider: live (DeepSeek API)")
+	} else {
+		fmt.Println("  Provider: mock (auto-generated)")
+	}
 	fmt.Println()
 
-	// Run evaluation. The eval harness checks each scenario against expectations.
-	// In real usage, this calls the provider API. For determinism, a mock provider
-	// is used when no provider is configured.
+	// Run evaluation.
 	cfg := prompt.EvalConfig{
 		Role:      *role,
 		Prompt:    promptText,
 		Model:     *model,
 		Scenarios: suite.Scenarios,
+		Provider:  prov,
 	}
 
-	run, err := prompt.Evaluate(nil, cfg)
+	run, err := prompt.Evaluate(context.Background(), cfg)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Evaluation failed: %v\n", err)
 		return 1
@@ -119,7 +162,7 @@ func promptEvalCommand(args []string) int {
 		}
 		fmt.Printf("  %s  %s", status, result.Scenario)
 		if result.Duration > 0 {
-			fmt.Printf(" (%v)", result.Duration)
+			fmt.Printf(" (%v)", result.Duration.Round(time.Millisecond))
 		}
 		fmt.Println()
 		for _, failure := range result.Failures {
@@ -179,6 +222,7 @@ func promptEvalUsage() {
 	fmt.Println("Usage: reasonix prompt eval <role> [flags]")
 	fmt.Println()
 	fmt.Println("Flags:")
+	fmt.Println("  --live                Use real DeepSeek API (requires DEEPSEEK_API_KEY env)")
 	fmt.Println("  --model <name>       Model to use for evaluation")
 	fmt.Println("  --scenarios <file>   Custom scenarios file")
 	fmt.Println("  --json               Output results as JSON")

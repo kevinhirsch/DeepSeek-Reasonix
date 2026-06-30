@@ -2,7 +2,6 @@ import {
   memo,
   useCallback,
   useEffect,
-  useId,
   useMemo,
   useReducer,
   type FormEvent as ReactFormEvent,
@@ -190,7 +189,7 @@ export const RemotesPanel = memo(function RemotesPanel({
   const reducedMotion = usePrefersReducedMotion();
 
   const isEditing = state.editingId !== null;
-  const _editingWorker = useMemo(
+  void useMemo(
     () =>
       state.editingId ? state.workers.find((w) => w.id === state.editingId) : null,
     [state.editingId, state.workers],
@@ -275,7 +274,7 @@ export const RemotesPanel = memo(function RemotesPanel({
   const handleDelete = useCallback(
     async (workerId: string) => {
       try {
-        const bridge = app as Record<string, (id: string) => Promise<void>>;
+        const bridge = app as unknown as Record<string, (id: string) => Promise<void>>;
         await (bridge["RemoveRemoteWorker"]?.(workerId) ?? Promise.resolve());
         await loadWorkers();
       } catch (err) {
