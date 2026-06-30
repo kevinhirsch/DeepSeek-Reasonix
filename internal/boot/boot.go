@@ -204,6 +204,7 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 		}
 	}
 	jm := jobs.NewManager(sink, jobs.WithStalledWarningAfter(time.Duration(cfg.BackgroundJobStalledWarningSeconds())*time.Second))
+	messenger := agent.NewSubagentMessenger()
 	sessionDir := opts.SessionDir
 	if sessionDir == "" {
 		sessionDir = config.SessionDir()
@@ -648,6 +649,9 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 	// has none, so ask resolves to "decide for yourself".
 	reg.Add(agent.NewAskTool())
 
+	// send_to_subagent tool lets the parent steer running background sub-agents.
+	reg.Add(agent.NewSendToSubagentTool())
+
 	// Skill tools: read_only_skill is a narrow plan-mode-safe entry point; the
 	// full skills source adds run_skill / install_skill plus the dedicated
 	// subagent wrappers (explore / research / review / security_review). Read-only
@@ -999,6 +1003,7 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 	executor := agent.New(execProv, reg, execSess, agent.Options{
 		MaxSteps:                           maxSteps,
 		Temperature:                        cfg.Agent.Temperature,
+				Messenger:                             messenger,
 				IsDeepSeek:            openai.IsDeepSeek(entry.BaseURL),
 		Pricing:                            entry.Price,
 		Gate:                               headlessGate,

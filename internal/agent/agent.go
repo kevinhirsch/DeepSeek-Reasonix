@@ -67,14 +67,15 @@ type callContext struct {
 	parentID string
 	sink     event.Sink
 	asker    Asker
-	planMode bool
+		planMode  bool
+		messenger *SubagentMessenger
 }
 
 // withCallContext stamps ctx with the executing call's ID, the agent's sink, and
 // the asker. executeOne sets this before every Execute; `task` reads it (via
 // CallContext) to nest sub-agent events, and `ask` reads the asker to prompt.
-func withCallContext(ctx context.Context, parentID string, sink event.Sink, asker Asker, planMode bool) context.Context {
-	return context.WithValue(ctx, callContextKey{}, callContext{parentID: parentID, sink: sink, asker: asker, planMode: planMode})
+func withCallContext(ctx context.Context, parentID string, sink event.Sink, asker Asker, planMode bool, messenger *SubagentMessenger) context.Context {
+	return context.WithValue(ctx, callContextKey{}, callContext{parentID: parentID, sink: sink, asker: asker, planMode: planMode, messenger: messenger})
 }
 
 // CallContext returns the executing call's ID, the agent's sink, and the asker,
@@ -85,6 +86,16 @@ func CallContext(ctx context.Context) (parentID string, sink event.Sink, asker A
 	if !ok {
 		return "", nil, nil, false
 	}
+
+// MessengerFromCallContext extracts the SubagentMessenger from a call context.
+// Returns nil when not set (e.g. headless runs without a messenger).
+func MessengerFromCallContext(ctx context.Context) *SubagentMessenger {
+	cc, ok := ctx.Value(callContextKey{}).(callContext)
+	if !ok {
+		return nil
+	}
+	return cc.messenger
+}
 	return cc.parentID, cc.sink, cc.asker, true
 }
 
@@ -761,6 +772,10 @@ type Options struct {
 	// via openai.IsDeepSeek(entry.BaseURL) to avoid a circular import in agent.
 	IsDeepSeek bool
 
+	// Messenger is the SubagentMessenger shared across the session.
+	// When non-nil, the send_to_subagent tool can reach running sub-agents.
+	Messenger *SubagentMessenger
+
 	// MemoryCompiler enables Memory v5 execution trace writeback and cache-safe
 	// execution-contract compilation.
 	MemoryCompiler *memorycompiler.Runtime
@@ -829,6 +844,7 @@ func New(prov provider.Provider, tools *tool.Registry, session *Session, opts Op
 		planModeReadOnlyTrust:   planModeReadOnlyTrust,
 		hooks:                   hooks,
 		jobs:                    opts.Jobs,
+			messenger:               opts.Messenger,
 		evidence:                evidence.NewLedger(),
 			loopState:               new(cognitiveLoopState),
 			isDeepSeek:              opts.IsDeepSeek,
@@ -2158,7 +2174,7 @@ func (a *Agent) executeOne(ctx context.Context, call provider.ToolCall) toolOutc
 			}
 		}
 	}
-	cctx := withCallContext(ctx, call.ID, a.sink, a.asker, a.planMode.Load())
+	cctx := withCallContext(ctx, call.ID, a.sink, a.asker, a.planMode.Load(), a.messenger)
 	if a.evidence != nil {
 		cctx = evidence.WithLedger(cctx, a.evidence)
 		cctx = evidence.WithSessionMessages(cctx, a.session.Snapshot())
