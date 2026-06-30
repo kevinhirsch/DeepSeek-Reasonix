@@ -141,6 +141,7 @@ export const zh: Record<DictKey, string> = {
   "rightDock.workbench": "工作区面板",
   "rightDock.views": "工作区视图",
   "rightDock.overview": "概览",
+  "rightDock.workflow": "工作流",
 
   // 话题栏
   "topicBar.renameSession": "重命名会话",
@@ -837,6 +838,7 @@ export const zh: Record<DictKey, string> = {
   "settings.tab.sandbox": "沙箱",
   "settings.tab.appearance": "外观",
   "settings.tab.updates": "更新",
+  "settings.tab.remotes": "远程",
   "settings.tabSub.general": "偏好与启动",
   "settings.tabSub.models": "默认与运行",
   "settings.tabSub.providers": "连接与授权",

@@ -9,10 +9,20 @@ import { useGSAPCollapse } from "../lib/useGSAPCollapse";
 import type { Item } from "../lib/useController";
 import { isReadOnlyTool } from "../lib/useController";
 import { ReadOnlyBatch } from "./ReadOnlyBatch";
-
+import { WorkflowCard } from "./WorkflowCard";
+import type { WorkflowData } from "./WorkflowCard";
+import { SpeculativeResultsCard } from "./SpeculativeResultsCard";
+import type { SpeculativeResults } from "./SpeculativeResultsCard";
+import { VotingBreakdown } from "./VotingBreakdown";
+import type { VotingData } from "./VotingBreakdown";
 type ToolItem = Extract<Item, { kind: "tool" }>;
 
 const SUBAGENT_TOOLS = new Set(["task", "run_skill", "explore", "research", "review", "security_review"]);
+
+/** Tool names that produce workflow visualisation cards in the transcript. */
+const WORKFLOW_TOOLS = new Set(["workflow_start", "workflow_run", "workflow_status"]);
+const SPECULATIVE_TOOLS = new Set(["speculative_execute", "speculative_results"]);
+const VOTING_TOOLS = new Set(["vote_check", "voting_consensus", "consensus_check"]);
 
 /** Lines shown by default in a shell output block before the "show all" button. */
 const SHELL_PREVIEW_LINES = 10;
@@ -212,6 +222,35 @@ export const ToolCard = memo(function ToolCard({ item, subcalls, tabId, displayN
         )}
 
         {item.error && <div className="tool__err">{item.error}</div>}
+
+        {/* Workflow visualisation cards rendered inline beneath matching tool calls */}
+        {WORKFLOW_TOOLS.has(item.name) && (() => {
+          try {
+            const data: WorkflowData = item.output ? JSON.parse(item.output) : null;
+            if (data?.stages?.length) {
+              return <WorkflowCard workflow={data} defaultOpen={item.status === "running"} />;
+            }
+          } catch { /* output is not valid workflow JSON — skip */ }
+          return null;
+        })()}
+        {SPECULATIVE_TOOLS.has(item.name) && (() => {
+          try {
+            const data: SpeculativeResults = item.output ? JSON.parse(item.output) : null;
+            if (data?.totalRuns) {
+              return <SpeculativeResultsCard results={data} />;
+            }
+          } catch { /* output is not valid speculative-results JSON — skip */ }
+          return null;
+        })()}
+        {VOTING_TOOLS.has(item.name) && (() => {
+          try {
+            const data: VotingData = item.output ? JSON.parse(item.output) : null;
+            if (data?.votes?.length) {
+              return <VotingBreakdown data={data} />;
+            }
+          } catch { /* output is not valid voting JSON — skip */ }
+          return null;
+        })()}
       </div>
     </div>
   );

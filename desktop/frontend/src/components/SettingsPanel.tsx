@@ -55,8 +55,8 @@ import { SoundSelect } from "./SoundSelect";
 import { getSuccessPreference, setSuccessPreference, getAttentionPreference, setAttentionPreference, playSuccessChime, playAttentionChime, type SoundWavPref } from "../lib/sound";
 import { ModalCloseButton } from "./ModalCloseButton";
 import { ShortcutComboDisplay } from "./ShortcutComboDisplay";
-
-const SETTINGS_TABS: SettingsTab[] = ["general", "models", "bots", "mcp", "skills", "memory", "hooks", "shortcuts", "permissions", "sandbox", "network", "appearance", "updates"];
+import { RemotesPanel } from "./RemotesPanel";
+const SETTINGS_TABS: SettingsTab[] = ["general", "models", "bots", "mcp", "skills", "memory", "hooks", "shortcuts", "permissions", "sandbox", "network", "appearance", "updates", "remotes"];
 export type SettingsInitialFocus = { target: "bot-allowlist"; connectionId?: string };
 type DesktopPlatform = "darwin" | "windows" | "linux";
 
@@ -290,6 +290,11 @@ export function SettingsPanel({
                     />
                   </SettingsPageShell>
                 )}
+                {tab === "remotes" && (
+                  <SettingsPageShell key={tab} s={s} tab={tab} busy={false} apply={apply}>
+                    <RemotesPanel />
+                  </SettingsPageShell>
+                )}
               </>
             )}
           </main>
@@ -448,6 +453,8 @@ function settingsTabLabel(id: SettingsTab, t: ReturnType<typeof useT>): string {
       return t("settings.tab.appearance");
     case "updates":
       return t("settings.tab.updates");
+    case "remotes":
+      return t("settings.tab.remotes");
   }
 }
 
@@ -481,6 +488,8 @@ function settingsTabMeta(id: SettingsTab, s: SettingsView, t: ReturnType<typeof 
       return t("settings.appearanceMeta");
     case "updates":
       return t("settings.updatesMeta");
+    default:
+      return "";
   }
 }
 

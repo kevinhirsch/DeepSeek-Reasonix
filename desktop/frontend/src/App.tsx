@@ -21,6 +21,7 @@ import {
   FileJson,
   GitBranch,
   History,
+  Layers,
   MessageSquare,
   Settings as SettingsIcon,
   Pencil,
@@ -57,6 +58,9 @@ import { ShortcutsCheatsheet } from "./components/ShortcutsCheatsheet";
 import { ProjectTree } from "./components/ProjectTree";
 import { HeartbeatPanel } from "./custom/features/heartbeat/HeartbeatPanel";
 import "./custom/features/heartbeat/heartbeat.css";
+import { RepoPicker } from "./components/RepoPicker";
+import { BackgroundTasksPanel } from "./components/BackgroundTasksPanel";
+import { WorkflowPanel } from "./components/WorkflowPanel";
 import { CopyButton } from "./components/CopyButton";
 import { parseTodos } from "./lib/tools";
 import {
@@ -866,6 +870,7 @@ export default function App() {
   const singleSurfaceLayout = desktopLayoutStyle === "workbench" || desktopLayoutStyle === "creation";
   const [startupUpdateChecksEnabled, setStartupUpdateChecksEnabled] = useState<boolean | null>(null);
   const [histView, setHistView] = useState<HistoryViewState | null>(null);
+  const [showRepoPicker, setShowRepoPicker] = useState(false);
   const paletteOpen = useOverlayStore((s) => s.paletteOpen);
   const setPaletteOpen = useOverlayStore((s) => s.setPaletteOpen);
   const shortcutsOpen = useOverlayStore((s) => s.shortcutsOpen);
@@ -2812,6 +2817,14 @@ export default function App() {
                   <MessageSquare size={18} aria-hidden="true" />
                   <span>{t("topbar.newSession")}</span>
                 </button>
+                <button
+                  className="sidebar__quick-action"
+                  type="button"
+                  onClick={() => setShowRepoPicker(true)}
+                >
+                  <GitBranch size={18} aria-hidden="true" />
+                  <span>{t("repoPicker.cloneRepo")}</span>
+                </button>
               </div>
             </>
           ) : (
@@ -2931,6 +2944,16 @@ export default function App() {
                     <span className="sr-only">{t("sidebar.trash")}</span>
                   </button>
                 </Tooltip>
+                <Tooltip label={t("repoPicker.searchLabel")} fill side="top">
+                  <button
+                    className="sidebar__utility-button"
+                    type="button"
+                    onClick={() => setShowRepoPicker(true)}
+                  >
+                    <GitBranch size={16} aria-hidden="true" />
+                    <span className="sr-only">{t("repoPicker.searchLabel")}</span>
+                  </button>
+                </Tooltip>
                 <Tooltip label={t("heartbeat.scheduler")} fill side="top">
                   <button
                     className="sidebar__utility-button"
@@ -2991,6 +3014,15 @@ export default function App() {
                 >
                   <Trash2 size={15} />
                   <span>{t("sidebar.trash")}</span>
+                </button>
+              </Tooltip>
+              <Tooltip label={t("repoPicker.searchLabel")} fill side="right" disabled={sidebarNavTooltipDisabled}>
+                <button
+                  className="sidebar__navitem"
+                  onClick={() => setShowRepoPicker(true)}
+                >
+                  <GitBranch size={15} />
+                  <span>{t("repoPicker.searchLabel")}</span>
                 </button>
               </Tooltip>
               {!sidebarCreation && (
@@ -3358,6 +3390,7 @@ export default function App() {
                 }}
               />
             )}
+            <BackgroundTasksPanel />
             <Composer
               running={state.running || rewindCommitting}
               collaborationMode={collaborationMode}
@@ -3473,6 +3506,16 @@ export default function App() {
                   <GitBranch size={13} />
                   <span className="workbench-dock__tab-label">{t("workspace.changedTab")}</span>
                 </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={rightDockMode === "workflow"}
+                  className={`workbench-dock__tab${rightDockMode === "workflow" ? " workbench-dock__tab--active" : ""}`}
+                  onClick={() => openRightDockMode("workflow")}
+                >
+                  <Layers size={13} />
+                  <span className="workbench-dock__tab-label">{t("rightDock.workflow")}</span>
+                </button>
               </div>
             </div>
             <div className="workbench-dock__body">
@@ -3490,6 +3533,15 @@ export default function App() {
                   balance={state.balance}
                   sessionGen={state.sessionGen}
                   refreshKey={dockRefreshKey}
+                />
+              ) : rightDockMode === "workflow" ? (
+                <WorkflowPanel
+                  pollIntervalMs={500}
+                  onPoll={async () => {
+                    // Future: fetch workflow data from the controller or bridge.
+                    // The panel renders its empty state until data arrives.
+                    return undefined;
+                  }}
                 />
               ) : (
                 <WorkspacePanel
@@ -3559,6 +3611,17 @@ export default function App() {
             }}
           />
         </Suspense>
+      )}
+
+      {showRepoPicker && (
+        <RepoPicker
+          workspaceRoot={activeTab?.scope === "project" ? activeTab.workspaceRoot || "" : ""}
+          onClose={() => setShowRepoPicker(false)}
+          onRepoOpened={(path) => {
+            setShowRepoPicker(false);
+            void switchFolder(path);
+          }}
+        />
       )}
 
       <CommandPalette

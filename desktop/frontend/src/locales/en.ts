@@ -140,6 +140,7 @@ export const en = {
   "rightDock.workbench": "Workspace panel",
   "rightDock.views": "Workspace views",
   "rightDock.overview": "Overview",
+  "rightDock.workflow": "Workflow",
 
   // topic bar
   "topicBar.renameSession": "Rename session",
@@ -835,6 +836,7 @@ export const en = {
   "settings.tab.sandbox": "Sandbox",
   "settings.tab.appearance": "Appearance",
   "settings.tab.updates": "Updates",
+  "settings.tab.remotes": "Remotes",
   "settings.tabSub.general": "Preferences & startup",
   "settings.tabSub.models": "Defaults & runtime",
   "settings.tabSub.providers": "Connections & auth",
