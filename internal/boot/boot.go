@@ -1334,6 +1334,20 @@ func subagentEffectiveIdentity(cfg *config.Config, baseModelRef string, base *co
 	return modelID, strings.TrimSpace(config.EffectiveEffort(&entry))
 }
 
+// deepSeekSubagentTemperature overrides temperature to 0.6 for DeepSeek subagents
+// when the configured temperature is 0.0 (the reasonix default). DeepSeek recommends
+// 0.5–0.7; at 0.0 the model loops infinitely. Non-DeepSeek providers and non-zero
+// temperatures pass through unchanged.
+func deepSeekSubagentTemperature(e *config.ProviderEntry, configuredTemp float64) (float64, bool) {
+	if e == nil {
+		return configuredTemp, false
+	}
+	if strings.Contains(strings.ToLower(e.BaseURL), "deepseek") && configuredTemp == 0.0 {
+		return 0.6, true
+	}
+	return configuredTemp, false
+}
+
 // NewProvider builds a provider.Provider from a configured entry. Exported so
 // custom assemblers (e.g. the ACP per-session factory) can reuse it without
 // going through the full Build.

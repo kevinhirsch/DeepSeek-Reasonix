@@ -102,12 +102,6 @@ func main() {
 		}
 	}
 
-	// Restore saved desktop zoom factor (WebView2 ZoomFactor), or default to 1.0.
-	zoomFactor := 1.0
-	if zf, ok := loadZoomFactor(); ok && zf > 0 {
-		zoomFactor = zf
-	}
-
 	err := wails.Run(&options.App{
 		Title:     "Reasonix",
 		Width:     width,
@@ -150,7 +144,6 @@ func main() {
 			// Follow the OS theme so the title bar matches light/dark system
 			// preference instead of being locked to dark.
 			Theme:                windows.SystemDefault,
-			ZoomFactor:           zoomFactor,
 			WebviewGpuIsDisabled: windowsWebview2GPUDisabled(),
 		},
 		Linux: &linux.Options{

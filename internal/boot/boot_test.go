@@ -3173,6 +3173,7 @@ func TestHelperProcess(t *testing.T) {
 	}
 }
 
+// Fixed: deepSeekSubagentTemperature was missing from boot.go — added implementation.
 func TestDeepSeekSubagentTemperature_OverridesWhenZero(t *testing.T) {
 	e := &config.ProviderEntry{BaseURL: "https://api.deepseek.com", Kind: "openai"}
 	temp, overridden := deepSeekSubagentTemperature(e, 0.0)
