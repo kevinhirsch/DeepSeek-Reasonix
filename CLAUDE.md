@@ -84,26 +84,79 @@ git commit --amend -m "$(git log -1 --format=%B) \nCo-Authored-By: <gh-handle>"
 - **Attribute:** Every harvest commit includes `Co-Authored-By` trailers.
 - **Never harvest:** Werewolf games, heavily conflicted refactors, desktop-only polish.
 
-## Git Configuration
+## Clone & Setup Recipe
 
 ```bash
-# Remotes
+git clone https://github.com/kevinhirsch/DeepSeek-Reasonix.git
+cd DeepSeek-Reasonix
 git remote add upstream https://github.com/esengine/DeepSeek-Reasonix.git
 
-# To sync with upstream
-git fetch upstream main-v2
-git merge upstream/main-v2
+# Pull harvest tracking data (refs + notes)
+git config --local --add remote.origin.fetch "+refs/harvest/*:refs/harvest/*"
+git config --local --add remote.origin.fetch "+refs/notes/*:refs/notes/*"
+git fetch origin
+
+# Restore harvest inventory note
+git notes --ref=upstream-harvest show HEAD
 ```
 
-## Key Files
+## Documentation Inventory
 
+### Roadmap & Planning
 - `.reasonix/ROADMAP.md` — 7-phase implementation plan with durations
 - `.reasonix/DEPENDENCY_GRAPH.md` — issue dependency graph and critical path
-- `.reasonix/issues/*.md` — 25 issue specifications
+- `.reasonix/MIGRATION_PATH.md` — v1.0→v2.0 migration strategy
+
+### Quality Gates
+- `.reasonix/DEFINITION_OF_DONE.md` — 5 tiers, 189 checklist items. Every deliverable must satisfy all tiers.
+
+### Design Documents (by issue)
+
+| Doc | Issues | Purpose |
+|---|---|---|
+| `.reasonix/PROMPT_CALIBRATION.md` | #18 | 7-part prompt structure, evaluation harness, calibration thresholds |
+| `.reasonix/QUALITY_ARCHITECTURE.md` | #16 | 5 quality pillars, behavioral gates, DeepSeek-specific tuning |
+| `.reasonix/QUALITY_IMPROVEMENT_PLAN.md` | #16 | Quality improvement tracking |
+| `.reasonix/STRUCTURAL_COMPENSATION.md` | #19 | Compensations 1-10: speculative execution, cross-validation, post-processing |
+| `.reasonix/COMPENSATIONS_BEYOND.md` | #20 | Compensations 11-18: guardian, idle pre-computation, dependency watchdog |
+| `.reasonix/COMPENSATIONS_FINAL.md` | #21 | Compensations 19-25: adversarial self-testing, KB, tech debt, release notes |
+| `.reasonix/COMPENSATION_UI_WIRING.md` | #19-#21 | UI surface wiring for all compensations |
+| `.reasonix/STRESS_TEST.md` | #22 | Architecture stress test findings across 8 categories |
+| `.reasonix/GAP_ANALYSIS.md` | #22-#25 | Gap analysis across all phases |
+| `.reasonix/OPERATIONAL_GAPS.md` | #23 | 15 operational gap closures (O1-O15) |
+| `.reasonix/FINAL_GAPS.md` | #25 | 10 final gap closures (F1-F10) |
+| `.reasonix/FIDELITY_BRIDGE.md` | All phases | Strategy for bridging DeepSeek↔Claude Code behavioral quality |
+
+### Architecture & Design Reference
+- `.reasonix/STRATEGY_COMPARISON.md` — archival: original design explorations
+- `.reasonix/PERSISTENCE_DESIGN.md` — session, transcript, and state persistence design
+- `.reasonix/PACKAGE_DEPENDENCIES.md` — Go package dependency map
+- `.reasonix/CONFIG_SCHEMA_ADDITIONS.md` — reasonix.toml schema extensions
+- `.reasonix/MOCK_PROVIDER_DESIGN.md` — mock provider design for deterministic testing
+- `.reasonix/PERFORMANCE_BUDGET.md` — latency and token budgets per operation
+- `.reasonix/REGRESSION_MATRIX.md` — cross-version regression test matrix
+- `.reasonix/THREAT_MODEL.md` — security threat model for new tools
+
+### Implementation Reference
+- `.reasonix/ERROR_CODES.md` — error code taxonomy
+- `.reasonix/CLI_FLAGS.md` — CLI flag registry
+- `.reasonix/UI_TRACEABILITY.md` — UI surface to Gherkin scenario mapping
+- `.reasonix/UNKNOWNS.md` — known unknowns and open decisions
+
+### Research
+- `.reasonix/research/01-deepseek-reasoning-patterns.md` — DeepSeek cognitive behavior patterns
+- `.reasonix/research/02-subagent-ux-patterns.md` — subagent monitoring UX from 20+ CLI tools
+- `.reasonix/research/03-claude-code-subagent-architecture.md` — Claude Code's subagent internals
+- `.reasonix/research/04-reasonix-codebase-audit.md` — full codebase architecture audit
+- `.reasonix/research/05-tokenomics-reference.md` — pricing, tokens-per-turn, cost models
+- `.reasonix/research/README.md` — research archive index
+
+### Specifications
+- `.reasonix/issues/*.md` — 25 issue specifications (Problem, Design, Files, Acceptance)
 - `.reasonix/features/*.feature` — 49 Gherkin feature files (1,174 scenarios)
-- `.github/harvesting.md` — upstream PR harvesting procedure and inventory
 - `docs/GUIDE.md` — user guide
 - `docs/SPEC.md` — architecture specification
+- `.github/harvesting.md` — upstream PR harvesting procedure and 24-PR inventory
 
 ## Communication
 
