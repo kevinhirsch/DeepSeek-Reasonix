@@ -2,6 +2,11 @@
   <img src="docs/logo.svg" alt="Reasonix" width="640"/>
 </p>
 
+> [!NOTE]
+> **This is [`kevinhirsch/DeepSeek-Reasonix`](https://github.com/kevinhirsch/DeepSeek-Reasonix)** — an independent fork of [`esengine/DeepSeek-Reasonix`](https://github.com/esengine/DeepSeek-Reasonix) (25K★, MIT).
+> We ship our own implementation roadmap — systematic architectural work across subagent intelligence, remote environments, workflow engines, and resilience — while selectively harvesting high-value upstream fixes.
+> See **[CLAUDE.md](./CLAUDE.md)** for fork identity, **[`.github/harvesting.md`](./.github/harvesting.md)** for upstream PR tracking, and the **[25-issue roadmap](https://github.com/kevinhirsch/DeepSeek-Reasonix/issues)**.
+
 <p align="center">
   <strong>English</strong>
   &nbsp;·&nbsp;
