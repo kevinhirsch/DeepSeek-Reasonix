@@ -132,6 +132,10 @@ type chatTUI struct {
 	// (the block right after the marker), streamed in as the model thinks and
 	// removed when the block collapses (kept only in verbose mode). -1 when none.
 	reasoningTextIdx int
+
+	// bgPanel renders an inline background-tasks panel for live
+	// subagent status. Nil when no jobs are running.
+	bgPanel *backgroundPanel
 	// reasoningView is a bounded trailing window (≤ reasoningViewMax bytes) of the
 	// streaming thought, rendered live; the full text stays in reasoning for verbose.
 	reasoningView []byte
@@ -991,6 +995,26 @@ func (m chatTUI) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					break // a turn is running — also cancel it via the main Esc handler
 				}
 				return m, nil
+			}
+		}
+		// Background tasks panel is modal when visible.
+		if m.bgPanel != nil && m.bgPanel.IsVisible() && len(m.ctrl.Jobs()) > 0 {
+			switch msg.String() {
+			case "esc":
+				m.bgPanel.ToggleVisibility()
+				return m, finalize(m, cmds)
+			case "j", "down":
+				m.bgPanel.SelectNext(len(m.ctrl.Jobs()))
+				return m, finalize(m, cmds)
+			case "k", "up":
+				m.bgPanel.SelectPrev()
+				return m, finalize(m, cmds)
+			case "enter":
+				// Peek: show selected subagent output (future)
+				return m, finalize(m, cmds)
+			case "s":
+				// Send: queue message to selected subagent (future)
+				return m, finalize(m, cmds)
 			}
 		}
 		switch msg.String() {
