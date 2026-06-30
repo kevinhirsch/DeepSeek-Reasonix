@@ -69,3 +69,4 @@ Thumbs.db
 
 benchmarks/context-maintenance-e2e/run/
 reasonix*.exe
+*.test.exe
