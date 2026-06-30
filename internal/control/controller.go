@@ -39,6 +39,7 @@ import (
 	"reasonix/internal/guardian"
 	"reasonix/internal/hook"
 	"reasonix/internal/i18n"
+	"reasonix/internal/idle"
 	"reasonix/internal/jobs"
 	"reasonix/internal/memory"
 	"reasonix/internal/memorycompiler"
@@ -87,6 +88,9 @@ type Controller struct {
 	// save never stalls an approval or status poll. See memory.go.
 	memory            memoryManager
 	cleanup           func()
+	cleanupFns        []func() // extension cleanup chain
+	idleDetector      *idle.Detector
+	watchdogCancel    context.CancelFunc
 	autoPlan          string
 	responseLanguage  string
 	reasoningLanguage string
@@ -1238,6 +1242,7 @@ func (c *Controller) notice(text string) {
 // headless `reasonix run` path, where the Sink renders to stdout and the caller
 // just needs the exit status — no TurnDone event, no cancel bookkeeping.
 func (c *Controller) Run(ctx context.Context, input string) error {
+	TouchIdle(c)
 	c.maybeSessionStart(ctx)
 	parentSession := c.parentSessionID()
 	ctx = agent.WithParentSession(ctx, parentSession)

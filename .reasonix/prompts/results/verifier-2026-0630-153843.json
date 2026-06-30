@@ -1,0 +1,50 @@
+{
+  "role": "verifier",
+  "model": "",
+  "passed": 4,
+  "failed": 0,
+  "pass_rate": 100,
+  "results": [
+    {
+      "scenario": "refute-with-evidence",
+      "passed": true,
+      "failures": null,
+      "tokens_in": 150,
+      "tokens_out": 50,
+      "reasoning_tokens": 0,
+      "duration": 0,
+      "transcript": "CONFIRMED|PLAUSIBLE|REFUTED\n"
+    },
+    {
+      "scenario": "independent-verification",
+      "passed": true,
+      "failures": null,
+      "tokens_in": 150,
+      "tokens_out": 50,
+      "reasoning_tokens": 0,
+      "duration": 0,
+      "transcript": "CONFIRMED|PLAUSIBLE|REFUTED\n"
+    },
+    {
+      "scenario": "default-skepticism",
+      "passed": true,
+      "failures": null,
+      "tokens_in": 150,
+      "tokens_out": 50,
+      "reasoning_tokens": 0,
+      "duration": 0,
+      "transcript": "PLAUSIBLE\n"
+    },
+    {
+      "scenario": "find-counter-evidence",
+      "passed": true,
+      "failures": null,
+      "tokens_in": 150,
+      "tokens_out": 50,
+      "reasoning_tokens": 0,
+      "duration": 0,
+      "transcript": "file:\nCONFIRMED|PLAUSIBLE|REFUTED\n"
+    }
+  ],
+  "cost_est": 0
+}

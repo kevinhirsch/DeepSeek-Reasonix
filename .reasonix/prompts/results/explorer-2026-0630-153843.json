@@ -1,0 +1,50 @@
+{
+  "role": "explorer",
+  "model": "",
+  "passed": 4,
+  "failed": 0,
+  "pass_rate": 100,
+  "results": [
+    {
+      "scenario": "find-single-caller",
+      "passed": true,
+      "failures": null,
+      "tokens_in": 150,
+      "tokens_out": 50,
+      "reasoning_tokens": 0,
+      "duration": 0,
+      "transcript": "file:\n"
+    },
+    {
+      "scenario": "negative-claim-is-evidenced",
+      "passed": true,
+      "failures": null,
+      "tokens_in": 150,
+      "tokens_out": 50,
+      "reasoning_tokens": 0,
+      "duration": 0,
+      "transcript": "searched for\n"
+    },
+    {
+      "scenario": "broad-first-search-then-read",
+      "passed": true,
+      "failures": null,
+      "tokens_in": 150,
+      "tokens_out": 50,
+      "reasoning_tokens": 0,
+      "duration": 0,
+      "transcript": "file:\n"
+    },
+    {
+      "scenario": "no-narration-between-reads",
+      "passed": true,
+      "failures": null,
+      "tokens_in": 150,
+      "tokens_out": 50,
+      "reasoning_tokens": 0,
+      "duration": 0,
+      "transcript": "auth.go\nmiddleware.go\nhandlers.go\n"
+    }
+  ],
+  "cost_est": 0
+}

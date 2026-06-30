@@ -1,0 +1,40 @@
+{
+  "role": "planner",
+  "model": "",
+  "passed": 3,
+  "failed": 0,
+  "pass_rate": 100,
+  "results": [
+    {
+      "scenario": "testable-steps-with-effort",
+      "passed": true,
+      "failures": null,
+      "tokens_in": 150,
+      "tokens_out": 50,
+      "reasoning_tokens": 0,
+      "duration": 0,
+      "transcript": "Step\neffort\nDone when\n"
+    },
+    {
+      "scenario": "identifies-dependencies",
+      "passed": true,
+      "failures": null,
+      "tokens_in": 150,
+      "tokens_out": 50,
+      "reasoning_tokens": 0,
+      "duration": 0,
+      "transcript": "Dependencies\ndepends on\n"
+    },
+    {
+      "scenario": "provides-alternatives",
+      "passed": true,
+      "failures": null,
+      "tokens_in": 150,
+      "tokens_out": 50,
+      "reasoning_tokens": 0,
+      "duration": 0,
+      "transcript": "Alternative\nStep\n"
+    }
+  ],
+  "cost_est": 0
+}
