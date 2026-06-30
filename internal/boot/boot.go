@@ -701,6 +701,7 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 			KeepPolicy:          keepPolicy,
 			ReasoningLanguage:   agent.ReasoningLanguageFromContext(sctx),
 				InjectPrompt:        injectPrompt,
+				IsDeepSeek:            openai.IsDeepSeek(entry.BaseURL),
 		}, agent.NestedSink(sctx, event.Discard))
 	}
 	// Writer-capable subagent skills reuse the sub-agent machinery via this
@@ -786,6 +787,7 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 			KeepPolicy:        keepPolicy,
 			ReasoningLanguage: agent.ReasoningLanguageFromContext(sctx),
 				InjectPrompt:        injectPrompt,
+				IsDeepSeek:            openai.IsDeepSeek(entry.BaseURL),
 		}, agent.NestedSink(sctx, event.Discard))
 		if err != nil {
 			return "", errors.Join(err, subagentStore.SaveFailed(run))
@@ -997,6 +999,7 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 	executor := agent.New(execProv, reg, execSess, agent.Options{
 		MaxSteps:                           maxSteps,
 		Temperature:                        cfg.Agent.Temperature,
+				IsDeepSeek:            openai.IsDeepSeek(entry.BaseURL),
 		Pricing:                            entry.Price,
 		Gate:                               headlessGate,
 		Hooks:                              hookRunner,

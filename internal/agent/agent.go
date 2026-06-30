@@ -268,6 +268,10 @@ type Agent struct {
 	// complete_step validate that cited evidence happened before the claim.
 	evidence *evidence.Ledger
 
+	// loopState tracks per-turn reasoning patterns for the DeepSeek cognitive
+	// loop detector (Issue #03). Nil when the provider is not DeepSeek.
+	loopState *cognitiveLoopState
+
 	// todoState is the host's canonical task list: the latest successful
 	// todo_write with completions applied by complete_step. Unlike the per-turn
 	// ledger it survives turn boundaries and compaction (it never rides in the
@@ -753,6 +757,10 @@ type Options struct {
 	// DeepSeek providers that respond better to user-role instructions.
 	InjectPrompt string
 
+	// IsDeepSeek arms the DeepSeek cognitive loop detector. Set from boot.go
+	// via openai.IsDeepSeek(entry.BaseURL) to avoid a circular import in agent.
+	IsDeepSeek bool
+
 	// MemoryCompiler enables Memory v5 execution trace writeback and cache-safe
 	// execution-contract compilation.
 	MemoryCompiler *memorycompiler.Runtime
@@ -822,6 +830,8 @@ func New(prov provider.Provider, tools *tool.Registry, session *Session, opts Op
 		hooks:                   hooks,
 		jobs:                    opts.Jobs,
 		evidence:                evidence.NewLedger(),
+			loopState:               new(cognitiveLoopState),
+			isDeepSeek:              opts.IsDeepSeek,
 		projectChecks:           append([]instruction.VerifyCheck(nil), opts.ProjectChecks...),
 		contextWindow:           opts.ContextWindow,
 		softCompactRatio:        opts.SoftCompactRatio,
@@ -991,6 +1001,17 @@ func (a *Agent) Run(ctx context.Context, input string) (runErr error) {
 		})
 
 		if len(calls) == 0 {
+			// DeepSeek cognitive loop detection (Issue #03).
+			if a.isDeepSeek && a.loopState != nil {
+				if loopDetected, pattern := detectCognitiveLoop(a.loopState, reasoning, len(calls) == 0); loopDetected {
+					a.sink.Emit(event.Event{Kind: event.Notice, Level: event.LevelWarn,
+						Text: "cognitive loop detected: " + pattern})
+					a.session.Add(provider.Message{Role: provider.RoleUser,
+						Content: a.withTurnPreferences(cognitiveLoopBreakerMessage(pattern))})
+					a.maybeCompact(ctx, usage)
+					continue
+				}
+			}
 				// Gate 1: Promise detection — if the model's final answer
 				// ends with "I'll..." or similar, it's promising future
 				// work instead of executing it now.
@@ -1977,6 +1998,9 @@ func (a *Agent) applyStormBreaker(calls []provider.ToolCall, outcomes []toolOutc
 	sig, ok := batchStormSignature(calls, outcomes)
 	if !ok {
 		a.stormSig, a.stormCount = "", 0
+	if a.loopState != nil {
+		resetCognitiveLoopState(a.loopState)
+	}
 		return
 	}
 	if sig != a.stormSig {
