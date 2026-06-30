@@ -2,358 +2,394 @@
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
+	"unicode"
+	"unicode/utf8"
 )
 
-// VerifyResult captures the outcome of a cross-validation pass.
-type VerifyResult struct {
-	ID          string    `json:"id"`
-	Passed      bool      `json:"passed"`
-	Score       float64   `json:"score"`
-	Model       string    `json:"model"`
-	ReviewedAt  time.Time `json:"reviewed_at"`
-	Conflicts   []string  `json:"conflicts,omitempty"`
-	Notes       string    `json:"notes,omitempty"`
-	IsStale     bool      `json:"is_stale"`
+// modelVersionDiffThreshold is the minimum number of major-version bumps that
+// trigger a re-verification. For example, if an entry was produced by model
+// version "v3" and the current model is "v5", the entry needs re-verification.
+const modelVersionDiffThreshold = 1
+
+// VerificationResult reports the outcome of verifying (or re-verifying) a KB
+// entry after a cross-validation pass.
+type VerificationResult struct {
+	// Verified is true when a second-pass check confirmed the entry.
+	Verified bool
+	// NeedReverify is true when the entry came from a model version that is
+	// significantly different from the current version and should be re-verified.
+	NeedReverify bool
+	// Confidence is the adjusted confidence after verification.
+	Confidence float64
+	// Reason explains what action, if any, was taken.
+	Reason string
 }
 
-// VerifyPass records the outcome of a single verification pass against a
-// knowledge entry. Multiple passes from different model versions build
-// confidence; a pass from a newer model marks older passes as potentially
-// stale.
-type VerifyPass struct {
-	EntryID   string    `json:"entry_id"`
-	Model     string    `json:"model"`
-	Score     float64   `json:"score"`
-	Passed    bool      `json:"passed"`
-	Conflicts []string  `json:"conflicts,omitempty"`
-	Notes     string    `json:"notes,omitempty"`
-	CreatedAt time.Time `json:"created_at"`
-}
-
-// VerifyOptions controls verification behavior.
-type VerifyOptions struct {
-	// MinConfidence is the minimum confidence threshold before an entry is
-	// stored. Entries below this threshold are discarded. Default 0.6.
-	MinConfidence float64
-
-	// RequireModelTag forces entries to carry a Model version tag.
-	// Empty-model entries are rejected when true.
-	RequireModelTag bool
-
-	// CrossVerifyModel is an alternate model version to re-verify against.
-	// When set, entries are reviewed by a second model and must agree within
-	// the AgreementThreshold.
-	CrossVerifyModel string
-
-	// AgreementThreshold is the minimum score delta allowed between the
-	// primary model and the cross-verify model. Default 0.2.
-	AgreementThreshold float64
-
-	// StaleAfter marks entries not accessed within this duration as stale.
-	// A zero duration disables staleness checking.
-	StaleAfter time.Duration
-
-	// MaxConflictAge removes conflict flags older than this duration.
-	MaxConflictAge time.Duration
-}
-
-func (o *VerifyOptions) defaults() {
-	if o.MinConfidence <= 0 {
-		o.MinConfidence = 0.6
-	}
-	if o.AgreementThreshold <= 0 {
-		o.AgreementThreshold = 0.2
-	}
-}
-
-// VerifyStore extends Store with cross-validation and staleness tracking.
-type VerifyStore struct {
-	*Store
+// KBVerifier manages knowledge-base entry verification: before an entry is
+// stored it cross-validates key claims with a second verification pass; at
+// access time it flags stale entries (tagged with an obsolete model version);
+// and entries from significantly different model versions are re-verified.
+//
+// The verifier does NOT call an LLM itself — that is the caller's
+// responsibility. It provides the decision: whether verification is needed,
+// whether the entry is stale, and what the adjusted confidence should be.
+type KBVerifier struct {
 	mu    sync.RWMutex
-	passes map[string][]VerifyPass // entry ID -> verification passes
-	opts   VerifyOptions
+	model string // current model id (e.g. "deepseek-chat")
+	// version is the current producing model version tag, independent of the
+	// model id: it captures a deployment-granularity stamp (e.g. "2025-12-v2",
+	// "v4.1") so two model ids may share a version lineage.
+	version string
+	// versionHistory records when each model version was first observed.
+	versionHistory map[string]time.Time
 }
 
-// NewVerifyStore wraps an existing Store with verification capabilities.
-func NewVerifyStore(s *Store, opts VerifyOptions) *VerifyStore {
-	opts.defaults()
-	return &VerifyStore{
-		Store:  s,
-		passes: make(map[string][]VerifyPass),
-		opts:   opts,
+// NewKBVerifier creates a verifier keyed to the given model and version.
+func NewKBVerifier(model, version string) *KBVerifier {
+	return &KBVerifier{
+		model:          model,
+		version:        version,
+		versionHistory: map[string]time.Time{version: time.Now()},
 	}
 }
 
-// VerifyEntry cross-validates a candidate entry before it is stored.
-// It runs these checks in order:
-//   1. Model tag required check
-//   2. Confidence floor check
-//   3. Cross-verify against a second model pass (if configured)
-// Returns a VerifyResult indicating pass/fail and identified conflicts.
-func (v *VerifyStore) VerifyEntry(e *Entry, crossVerifyFn func(question, answer string) (float64, []string, error)) (*VerifyResult, error) {
-	vr := &VerifyResult{
-		ID:         e.ID,
-		Model:      e.Model,
-		ReviewedAt: time.Now(),
-		Passed:     true,
-	}
-
-	// Gate 1: model tag.
-	if v.opts.RequireModelTag && strings.TrimSpace(e.Model) == "" {
-		vr.Passed = false
-		vr.Conflicts = append(vr.Conflicts, "missing model version tag")
-		vr.Notes = "entry rejected: model tag required"
-		return vr, nil
-	}
-
-	// Gate 2: confidence floor.
-	if e.Confidence < v.opts.MinConfidence {
-		vr.Passed = false
-		vr.Conflicts = append(vr.Conflicts,
-			fmt.Sprintf("confidence %.2f below floor %.2f", e.Confidence, v.opts.MinConfidence))
-		vr.Notes = "entry rejected: confidence below floor"
-		return vr, nil
-	}
-
-	// Gate 3: cross-verify against a second model.
-	if v.opts.CrossVerifyModel != "" && crossVerifyFn != nil {
-		crossScore, conflicts, err := crossVerifyFn(e.Question, e.Answer)
-		if err != nil {
-			vr.Passed = false
-			vr.Notes = fmt.Sprintf("cross-verify error: %v", err)
-			return vr, nil
-		}
-		delta := e.Confidence - crossScore
-		if delta < 0 {
-			delta = -delta
-		}
-		if delta > v.opts.AgreementThreshold {
-			vr.Passed = false
-			vr.Conflicts = append(vr.Conflicts, fmt.Sprintf(
-				"model divergence: primary=%.2f cross=%.2f delta=%.2f > threshold=%.2f",
-				e.Confidence, crossScore, delta, v.opts.AgreementThreshold))
-		}
-		vr.Score = (e.Confidence + crossScore) / 2
-
-		// Record the cross-verify pass.
-		v.mu.Lock()
-		v.passes[e.ID] = append(v.passes[e.ID], VerifyPass{
-			EntryID:   e.ID,
-			Model:     v.opts.CrossVerifyModel,
-			Score:     crossScore,
-			Passed:    delta <= v.opts.AgreementThreshold,
-			Conflicts: conflicts,
-			CreatedAt: time.Now(),
-		})
-		v.mu.Unlock()
-	}
-
-	return vr, nil
-}
-
-// AddWithVerification combines cross-validation with storage.
-// If verification fails, the entry is not stored and the VerifyResult
-// is returned. On pass, the entry is stored and a primary verification
-// pass is recorded.
-func (v *VerifyStore) AddWithVerification(q, answer string, files []string, model string, confidence float64, crossVerifyFn func(question, answer string) (float64, []string, error)) (*Entry, *VerifyResult, error) {
-	// Build a temporary entry for verification.
-	e := &Entry{
-		Question:   q,
-		Answer:     answer,
-		Files:      files,
-		Confidence: confidence,
-		Model:      model,
-	}
-
-	vr, err := v.VerifyEntry(e, crossVerifyFn)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	if !vr.Passed {
-		return nil, vr, nil
-	}
-
-	// Store the entry.
-	stored := v.Store.Add(q, answer, files, model, confidence)
-
-	// Record the primary pass.
-	v.mu.Lock()
-	v.passes[stored.ID] = append(v.passes[stored.ID], VerifyPass{
-		EntryID:   stored.ID,
-		Model:     model,
-		Score:     confidence,
-		Passed:    true,
-		CreatedAt: time.Now(),
-	})
-	v.mu.Unlock()
-
-	return stored, vr, nil
-}
-
-// CheckStale examines an entry on access and returns whether it is stale
-// and the reason. An entry is stale when:
-//   - It has not been accessed within StaleAfter.
-//   - Its primary verification model is out of date (newer model available).
-//   - Conflict flags are older than MaxConflictAge.
-func (v *VerifyStore) CheckStale(e *Entry) (bool, string) {
-	if v.opts.StaleAfter > 0 {
-		if time.Since(e.AccessedAt) > v.opts.StaleAfter {
-			return true, fmt.Sprintf("last accessed %s ago, threshold %s",
-				time.Since(e.AccessedAt).Round(time.Second), v.opts.StaleAfter)
-		}
-	}
-
-	// Check if the entry's model is out of date relative to any passes.
-	v.mu.RLock()
-	passes := v.passes[e.ID]
-	v.mu.RUnlock()
-
-	if len(passes) > 1 {
-		var newestPass *VerifyPass
-		for i := range passes {
-			if newestPass == nil || passes[i].CreatedAt.After(newestPass.CreatedAt) {
-				newestPass = &passes[i]
-			}
-		}
-		if newestPass != nil && newestPass.Model != "" && newestPass.Model != e.Model {
-			return true, fmt.Sprintf("newer verification available from model %s (%s ago)",
-				newestPass.Model, time.Since(newestPass.CreatedAt).Round(time.Second))
-		}
-	}
-
-	// Check conflict age.
-	if v.opts.MaxConflictAge > 0 {
-		for _, p := range passes {
-			if !p.Passed && time.Since(p.CreatedAt) > v.opts.MaxConflictAge {
-				return false, "" // conflicts aged out; entry is no longer considered stale from them
-			}
-		}
-	}
-
-	return false, ""
-}
-
-// ReVerify re-runs verification from a different model version and updates
-// the entry's confidence to the average of all passing verification scores.
-func (v *VerifyStore) ReVerify(e *Entry, model string, crossVerifyFn func(question, answer string) (float64, []string, error)) (*VerifyPass, error) {
-	if crossVerifyFn == nil {
-		return nil, fmt.Errorf("crossVerifyFn is nil")
-	}
-
-	score, conflicts, err := crossVerifyFn(e.Question, e.Answer)
-	if err != nil {
-		return nil, fmt.Errorf("re-verify error for %s: %w", e.ID, err)
-	}
-
-	pass := VerifyPass{
-		EntryID:   e.ID,
-		Model:     model,
-		Score:     score,
-		Passed:    score >= v.opts.MinConfidence,
-		Conflicts: conflicts,
-		CreatedAt: time.Now(),
-	}
-
-	v.mu.Lock()
-	v.passes[e.ID] = append(v.passes[e.ID], pass)
-	// Update entry confidence to the mean of all passing scores.
-	var sum float64
-	count := 0
-	for _, p := range v.passes[e.ID] {
-		if p.Passed {
-			sum += p.Score
-			count++
-		}
-	}
-	if count > 0 {
-		e.Confidence = sum / float64(count)
-	}
-	v.mu.Unlock()
-
-	// If this pass flagged conflicts with a passing current entry, lower confidence.
-	if len(conflicts) > 0 {
-		e.Confidence *= 0.8 // 20% penalty for identified conflicts
-	}
-
-	return &pass, nil
-}
-
-// VerificationPasses returns all verification passes for an entry.
-func (v *VerifyStore) VerificationPasses(entryID string) []VerifyPass {
-	v.mu.RLock()
-	defer v.mu.RUnlock()
-	out := make([]VerifyPass, len(v.passes[entryID]))
-	copy(out, v.passes[entryID])
-	return out
-}
-
-// StaleEntries returns all entries marked as stale.
-func (v *VerifyStore) StaleEntries() []*Entry {
-	v.mu.RLock()
-	defer v.mu.RUnlock()
-
-	var stale []*Entry
-	for _, e := range v.Store.entries {
-		if isStale, _ := v.CheckStale(e); isStale {
-			stale = append(stale, e)
-		}
-	}
-	return stale
-}
-
-// CleanStale removes entries that are stale and returns the count removed.
-func (v *VerifyStore) CleanStale() int {
+// SetModelVersion updates the current model and version. If the version is new,
+// it is recorded in the history.
+func (v *KBVerifier) SetModelVersion(model, version string) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
-
-	var toRemove []string
-	for id, e := range v.Store.entries {
-		if isStale, _ := v.CheckStale(e); isStale {
-			toRemove = append(toRemove, id)
-		}
+	v.model = model
+	v.version = version
+	if _, ok := v.versionHistory[version]; !ok {
+		v.versionHistory[version] = time.Now()
 	}
-	for _, id := range toRemove {
-		delete(v.Store.entries, id)
-		delete(v.passes, id)
-	}
-	return len(toRemove)
 }
 
-// VerifyStats provides aggregate verification statistics for observability.
-type VerifyStats struct {
-	TotalEntries      int     `json:"total_entries"`
-	VerifiedEntries   int     `json:"verified_entries"`
-	StaleEntries      int     `json:"stale_entries"`
-	MeanConfidence    float64 `json:"mean_confidence"`
-	ConflictCount     int     `json:"conflict_count"`
-	LastReVerifyModel string  `json:"last_reverify_model,omitempty"`
-}
-
-// Stats returns aggregate verification statistics.
-func (v *VerifyStore) Stats() VerifyStats {
+// CurrentModel returns the verifier's active model id.
+func (v *KBVerifier) CurrentModel() string {
 	v.mu.RLock()
 	defer v.mu.RUnlock()
+	return v.model
+}
 
-	s := VerifyStats{}
-	for id, e := range v.Store.entries {
-		s.TotalEntries++
-		s.MeanConfidence += e.Confidence
-		if passes, ok := v.passes[id]; ok && len(passes) > 0 {
-			s.VerifiedEntries++
-			for _, p := range passes {
-				if !p.Passed {
-					s.ConflictCount++
-				}
+// CurrentVersion returns the verifier's active model version.
+func (v *KBVerifier) CurrentVersion() string {
+	v.mu.RLock()
+	defer v.mu.RUnlock()
+	return v.version
+}
+
+// VerifyBeforeStore checks whether a candidate entry should be stored. It
+// performs a lightweight cross-validation of the entry's key claims.
+func (v *KBVerifier) VerifyBeforeStore(entry *Entry) VerificationResult {
+	answerLen := utf8.RuneCountInString(entry.Answer)
+	questionLen := utf8.RuneCountInString(entry.Question)
+
+	// Detect degenerate entries: answer is nearly the same as the question.
+	if questionLen > 0 && answerLen > 0 {
+		overlap := jaccardKeywordOverlap(entry.Question, entry.Answer)
+		if overlap > 0.85 {
+			return VerificationResult{
+				Verified:     false,
+				NeedReverify: true,
+				Confidence:   0.1,
+				Reason:       "answer content nearly identical to question - likely degenerate",
 			}
 		}
 	}
-	if s.TotalEntries > 0 {
-		s.MeanConfidence /= float64(s.TotalEntries)
+
+	// High confidence but too short: likely overconfident.
+	if entry.Confidence > 0.9 && answerLen < 80 {
+		return VerificationResult{
+			Verified:     false,
+			NeedReverify: true,
+			Confidence:   entry.Confidence * 0.5,
+			Reason:       fmt.Sprintf("high confidence (%.2f) with very short answer (%d chars) - request second pass", entry.Confidence, answerLen),
+		}
 	}
-	s.StaleEntries = len(v.StaleEntries())
-	return s
+
+	// Cross-validate file references: every listed file should appear in the
+	// answer context. Missing references may indicate hallucinated file links.
+	answerLower := strings.ToLower(entry.Answer)
+	missingFiles := 0
+	for _, f := range entry.Files {
+		base := baseName(f)
+		if !strings.Contains(answerLower, strings.ToLower(base)) {
+			missingFiles++
+		}
+	}
+	if missingFiles > 0 && missingFiles == len(entry.Files) {
+		penalty := float64(missingFiles) * 0.15
+		adj := entry.Confidence - penalty
+		if adj < 0.1 {
+			adj = 0.1
+		}
+		return VerificationResult{
+			Verified:     false,
+			NeedReverify: true,
+			Confidence:   adj,
+			Reason:       fmt.Sprintf("%d file references not found in answer text - possible hallucination", missingFiles),
+		}
+	}
+
+	// Passed all checks.
+	return VerificationResult{
+		Verified:   true,
+		Confidence: entry.Confidence,
+		Reason:     "pre-store cross-validation passed",
+	}
+}
+
+// CheckStale examines an entry at access time. It returns true and a reason when
+// the entry was produced by a model version that is no longer current.
+func (v *KBVerifier) CheckStale(entry *Entry) (stale bool, reason string) {
+	v.mu.RLock()
+	defer v.mu.RUnlock()
+
+	if entry.Model == "" {
+		return false, ""
+	}
+	if entry.Model == v.model {
+		return false, ""
+	}
+	return true, fmt.Sprintf("entry produced by model %q (current: %q)", entry.Model, v.model)
+}
+
+// NeedsReverify reports whether an entry should be re-verified because its
+// producing model version is significantly different from the current version.
+func (v *KBVerifier) NeedsReverify(entry *Entry) bool {
+	v.mu.RLock()
+	defer v.mu.RUnlock()
+
+	if entry.Model == "" {
+		return false
+	}
+
+	entryMajor := extractMajorVersion(entry.Model)
+	currentMajor := extractMajorVersion(v.version)
+	if entryMajor == 0 || currentMajor == 0 {
+		return false
+	}
+
+	diff := currentMajor - entryMajor
+	if diff < 0 {
+		diff = -diff
+	}
+	return diff > modelVersionDiffThreshold
+}
+
+// TagEntry stamps the entry with the current model id (as the producing model
+// tag). The caller should call this before persisting a new or re-verified entry.
+func (v *KBVerifier) TagEntry(entry *Entry) {
+	v.mu.RLock()
+	defer v.mu.RUnlock()
+	entry.Model = v.model
+}
+
+// ReverifyReason returns a human-readable reason string suitable for including in
+// a re-verification prompt when NeedsReverify returned true.
+func (v *KBVerifier) ReverifyReason(entry *Entry) string {
+	v.mu.RLock()
+	defer v.mu.RUnlock()
+	return fmt.Sprintf(
+		"entry produced by model version %q - current version is %q; re-verify for correctness",
+		entry.Model, v.version,
+	)
+}
+
+// extractMajorVersion returns the numeric major component from a version string
+// like "v4.1" (returns 4), "2025-12-v2" (returns 2025), or "" (returns 0).
+func extractMajorVersion(s string) int {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return 0
+	}
+	start := 0
+	for start < len(s) && !unicode.IsDigit(rune(s[start])) {
+		start++
+	}
+	if start >= len(s) {
+		return 0
+	}
+	var n int
+	for i := start; i < len(s) && unicode.IsDigit(rune(s[i])); i++ {
+		n = n*10 + int(rune(s[i])-'0')
+	}
+	return n
+}
+
+// jaccardKeywordOverlap returns the Jaccard similarity (0..1) of the keyword sets
+// of two strings. Keywords are lowercased, split on whitespace, and filtered to
+// tokens of at least 3 characters.
+func jaccardKeywordOverlap(a, b string) float64 {
+	ka := keywordSet(a)
+	kb := keywordSet(b)
+	if len(ka) == 0 && len(kb) == 0 {
+		return 1.0
+	}
+	intersection := 0
+	for k := range ka {
+		if kb[k] {
+			intersection++
+		}
+	}
+	union := len(ka) + len(kb) - intersection
+	if union == 0 {
+		return 0
+	}
+	return float64(intersection) / float64(union)
+}
+
+// keywordSet returns a set of normalized keywords (>=3 chars) from s.
+func keywordSet(s string) map[string]bool {
+	words := strings.Fields(strings.ToLower(s))
+	set := make(map[string]bool, len(words))
+	for _, w := range words {
+		w = strings.TrimFunc(w, func(r rune) bool {
+			return !unicode.IsLetter(r) && !unicode.IsDigit(r)
+		})
+		if utf8.RuneCountInString(w) >= 3 {
+			set[w] = true
+		}
+	}
+	return set
+}
+
+// baseName returns the last element of a file path.
+func baseName(path string) string {
+	path = strings.ReplaceAll(path, "\\", "/")
+	parts := strings.Split(path, "/")
+	return parts[len(parts)-1]
+}
+
+// --- semantic dedup helpers shared with eviction.go ---
+
+// keywordOverlap returns the Jaccard similarity of two entries' combined question
+// and answer text. A value > 0.8 is considered a semantic duplicate.
+func keywordOverlap(a, b *Entry) float64 {
+	textA := strings.ToLower(a.Question + " " + a.Answer)
+	textB := strings.ToLower(b.Question + " " + b.Answer)
+	return jaccardKeywordOverlap(textA, textB)
+}
+
+// mergeEntries combines two entries into one by keeping the higher-confidence
+// entry's core and folding in any unique files from the lower.
+func mergeEntries(keep, drop *Entry) {
+	seen := make(map[string]bool)
+	for _, f := range keep.Files {
+		seen[f] = true
+	}
+	for _, f := range drop.Files {
+		if !seen[f] {
+			keep.Files = append(keep.Files, f)
+			seen[f] = true
+		}
+	}
+	if drop.Confidence > keep.Confidence {
+		keep.Confidence = drop.Confidence
+	}
+	keep.Confidence *= 0.95
+	keep.AccessCount = (keep.AccessCount + drop.AccessCount) / 2
+	if drop.AccessedAt.After(keep.AccessedAt) {
+		keep.AccessedAt = drop.AccessedAt
+	}
+	if !strings.Contains(keep.Answer, "[merged from ") {
+		keep.Answer += fmt.Sprintf("\n\n[merged from duplicate entry %s]", drop.ID)
+	}
+}
+
+// sortEntriesByScore sorts entries in-place by eviction priority (lowest score
+// first = evicted first).
+func sortEntriesByScore(entries []*Entry, now time.Time) {
+	type scored struct {
+		e     *Entry
+		score float64
+	}
+	scored := make([]scored, len(entries))
+	for i, e := range entries {
+		scored[i] = scored{e: e, score: entryValueScore(e, now)}
+	}
+	sort.Slice(scored, func(i, j int) bool { return scored[i].score < scored[j].score })
+	for i, s := range scored {
+		entries[i] = s.e
+	}
+}
+
+// entryValueScore computes how valuable an entry is: higher = keep longer.
+func entryValueScore(e *Entry, now time.Time) float64 {
+	if e == nil {
+		return 0
+	}
+
+	ageHours := now.Sub(e.AccessedAt).Hours()
+	recency := 1.0
+	if ageHours > 0 {
+		recency = expDecay(ageHours, 168.0)
+	}
+
+	freq := 0.3
+	if e.AccessCount > 1 {
+		freq = logScale(float64(e.AccessCount), 100.0)
+	}
+	if freq > 1.0 {
+		freq = 1.0
+	}
+
+	conf := e.Confidence
+	if conf < 0 {
+		conf = 0
+	}
+	if conf > 1.0 {
+		conf = 1.0
+	}
+
+	ansLen := float64(utf8.RuneCountInString(e.Answer))
+	uniq := (ansLen/2000.0 + float64(len(e.Files))/5.0) / 2.0
+	if uniq > 1.0 {
+		uniq = 1.0
+	}
+	if uniq < 0.05 {
+		uniq = 0.05
+	}
+
+	return recency * freq * conf * uniq
+}
+
+// expDecay returns an approximate exponential-decay factor for scoring.
+func expDecay(t, halfLife float64) float64 {
+	if halfLife <= 0 {
+		return 1.0
+	}
+	lambda := 0.6931471805599453 / halfLife
+	r := 1.0 - lambda*t
+	if r < 0 {
+		return 0
+	}
+	return r
+}
+
+// logScale returns an approximate log10 scaling factor, clamped to [0, 1].
+func logScale(x, max float64) float64 {
+	if x <= 0 {
+		return 0
+	}
+	if x >= max {
+		return 1.0
+	}
+	lnX := 0
+	for tmp := int(x + 1); tmp > 1; tmp /= 10 {
+		lnX++
+	}
+	lnMax := 0
+	for tmp := int(max + 1); tmp > 1; tmp /= 10 {
+		lnMax++
+	}
+	if lnMax == 0 {
+		return 0
+	}
+	return float64(lnX) / float64(lnMax)
 }
