@@ -11,8 +11,8 @@ import (
 	"reasonix/internal/provider"
 )
 
-// CompensationCost tracks cumulative token spend for a single compensation.
-type CompensationCost struct {
+// CompensationCostHolder tracks cumulative token spend for a single compensation.
+type CompensationCostHolder struct {
 	// Name is the compensation label (e.g. "speculative", "cross-validate",
 	// "postprocess", "janitor", "premortem").
 	Name string `json:"name"`
@@ -68,7 +68,7 @@ type CompensationCost struct {
 
 // Record records token usage against this compensation, updating lifetime, day,
 // and month counters. It automatically resets day/month counters on rollover.
-func (c *CompensationCost) Record(usage provider.Usage) {
+func (c *CompensationCostHolder) Record(usage provider.Usage) {
 	now := time.Now().UTC()
 
 	// Reset day counters on day rollover.
@@ -102,7 +102,7 @@ func (c *CompensationCost) Record(usage provider.Usage) {
 
 // OverBudget reports whether this compensation has exceeded either its daily
 // or monthly budget (when one is set).
-func (c *CompensationCost) OverBudget() (bool, string) {
+func (c *CompensationCostHolder) OverBudget() (bool, string) {
 	if c.DayBudget > 0 && c.DayTokens > c.DayBudget {
 		return true, fmt.Sprintf("%s: daily budget exceeded (%d/%d tokens)",
 			c.Name, c.DayTokens, c.DayBudget)
@@ -116,7 +116,7 @@ func (c *CompensationCost) OverBudget() (bool, string) {
 
 // SetPricing updates the provider pricing used to calculate EstimatedCost and
 // recalculates all cost estimates from the recorded token counts.
-func (c *CompensationCost) SetPricing(pricePerMPrompt, pricePerMCompletion float64) {
+func (c *CompensationCostHolder) SetPricing(pricePerMPrompt, pricePerMCompletion float64) {
 	c.PricePerMPrompt = pricePerMPrompt
 	c.PricePerMCompletion = pricePerMCompletion
 
@@ -125,12 +125,13 @@ func (c *CompensationCost) SetPricing(pricePerMPrompt, pricePerMCompletion float
 	c.EstimatedCost = promptCost + completionCost
 }
 
-// CompensationCostStore tracks per-compensation spend against user-configured
-// thresholds and responds to provider price changes.
-type CompensationCostStore struct {
+// CompensationCostTracker tracks per-compensation token spend against
+// user-configured thresholds, responds to provider price changes, and
+// automatically pauses compensations on extreme price spikes.
+type CompensationCostTracker struct {
 	mu     sync.RWMutex
-	costs  map[string]*CompensationCost // name → cost tracker
-	paused map[string]string            // name → reason for pause
+	costs  map[string]*CompensationCostHolder // name → cost tracker
+	paused map[string]string                  // name → reason for pause
 
 	// Global budgets (shared across all non-budgeted compensations).
 	globalDayBudget   int
@@ -142,10 +143,10 @@ type CompensationCostStore struct {
 	spikeDetectors map[string]*SpikeDetector
 }
 
-// NewCompensationCostStore creates a cost tracker.
-func NewCompensationCostStore() *CompensationCostStore {
-	return &CompensationCostStore{
-		costs:          make(map[string]*CompensationCost),
+// NewCompensationCostTracker creates a cost tracker.
+func NewCompensationCostTracker() *CompensationCostTracker {
+	return &CompensationCostTracker{
+		costs:          make(map[string]*CompensationCostHolder),
 		paused:         make(map[string]string),
 		spikeDetectors: make(map[string]*SpikeDetector),
 	}
@@ -153,132 +154,132 @@ func NewCompensationCostStore() *CompensationCostStore {
 
 // GetOrCreate returns the cost tracker for a compensation, creating one with
 // the default pricing if it doesn't exist.
-func (s *CompensationCostStore) GetOrCreate(name string, pricePerMPrompt, pricePerMCompletion float64) *CompensationCost {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if c, ok := s.costs[name]; ok {
+func (t *CompensationCostTracker) GetOrCreate(name string, pricePerMPrompt, pricePerMCompletion float64) *CompensationCostHolder {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if c, ok := t.costs[name]; ok {
 		return c
 	}
-	c := &CompensationCost{
+	c := &CompensationCostHolder{
 		Name:                name,
 		PricePerMPrompt:     pricePerMPrompt,
 		PricePerMCompletion: pricePerMCompletion,
 	}
-	s.costs[name] = c
+	t.costs[name] = c
 	return c
 }
 
 // Record records token usage for a named compensation.
-func (s *CompensationCostStore) Record(name string, usage provider.Usage) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	c, ok := s.costs[name]
+func (t *CompensationCostTracker) Record(name string, usage provider.Usage) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	c, ok := t.costs[name]
 	if !ok {
 		// Create with zero pricing — caller should call SetPricing before use
 		// or this compensation hasn't been initialised with GetOrCreate.
-		c = &CompensationCost{Name: name}
-		s.costs[name] = c
+		c = &CompensationCostHolder{Name: name}
+		t.costs[name] = c
 	}
 	c.Record(usage)
-	s.globalDayTokens += usage.TotalTokens
-	s.globalMonthTokens += usage.TotalTokens
+	t.globalDayTokens += usage.TotalTokens
+	t.globalMonthTokens += usage.TotalTokens
 }
 
 // SetBudget configures a per-compensation budget.
-func (s *CompensationCostStore) SetBudget(name string, dayBudget, monthBudget int) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	c, ok := s.costs[name]
+func (t *CompensationCostTracker) SetBudget(name string, dayBudget, monthBudget int) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	c, ok := t.costs[name]
 	if !ok {
-		c = &CompensationCost{Name: name}
-		s.costs[name] = c
+		c = &CompensationCostHolder{Name: name}
+		t.costs[name] = c
 	}
 	c.DayBudget = dayBudget
 	c.MonthBudget = monthBudget
 }
 
 // SetGlobalBudget configures the global budget across all compensations.
-func (s *CompensationCostStore) SetGlobalBudget(dayBudget, monthBudget int) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.globalDayBudget = dayBudget
-	s.globalMonthBudget = monthBudget
+func (t *CompensationCostTracker) SetGlobalBudget(dayBudget, monthBudget int) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.globalDayBudget = dayBudget
+	t.globalMonthBudget = monthBudget
 }
 
 // BudgetExceeded returns a list of compensations exceeding their budgets.
-func (s *CompensationCostStore) BudgetExceeded() []string {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+func (t *CompensationCostTracker) BudgetExceeded() []string {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
 	var exceeded []string
-	for _, c := range s.costs {
+	for _, c := range t.costs {
 		if over, reason := c.OverBudget(); over {
 			exceeded = append(exceeded, reason)
 		}
 	}
-	if s.globalDayBudget > 0 && s.globalDayTokens > s.globalDayBudget {
+	if t.globalDayBudget > 0 && t.globalDayTokens > t.globalDayBudget {
 		exceeded = append(exceeded, fmt.Sprintf(
 			"global daily budget exceeded (%d/%d tokens)",
-			s.globalDayTokens, s.globalDayBudget))
+			t.globalDayTokens, t.globalDayBudget))
 	}
-	if s.globalMonthBudget > 0 && s.globalMonthTokens > s.globalMonthBudget {
+	if t.globalMonthBudget > 0 && t.globalMonthTokens > t.globalMonthBudget {
 		exceeded = append(exceeded, fmt.Sprintf(
 			"global monthly budget exceeded (%d/%d tokens)",
-			s.globalMonthTokens, s.globalMonthBudget))
+			t.globalMonthTokens, t.globalMonthBudget))
 	}
 	return exceeded
 }
 
 // Pause sets the paused flag on a compensation.
-func (s *CompensationCostStore) Pause(name, reason string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if c, ok := s.costs[name]; ok {
+func (t *CompensationCostTracker) Pause(name, reason string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if c, ok := t.costs[name]; ok {
 		c.Paused = true
 		c.PausedReason = reason
 	}
-	s.paused[name] = reason
+	t.paused[name] = reason
 }
 
 // Unpause clears the paused flag on a compensation.
-func (s *CompensationCostStore) Unpause(name string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if c, ok := s.costs[name]; ok {
+func (t *CompensationCostTracker) Unpause(name string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if c, ok := t.costs[name]; ok {
 		c.Paused = false
 		c.PausedReason = ""
 	}
-	delete(s.paused, name)
+	delete(t.paused, name)
 }
 
 // IsPaused reports whether a compensation is paused.
-func (s *CompensationCostStore) IsPaused(name string) bool {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	_, ok := s.paused[name]
+func (t *CompensationCostTracker) IsPaused(name string) bool {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	_, ok := t.paused[name]
 	return ok
 }
 
 // PausedList returns the names and reasons of all paused compensations.
-func (s *CompensationCostStore) PausedList() map[string]string {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	out := make(map[string]string, len(s.paused))
-	for k, v := range s.paused {
+func (t *CompensationCostTracker) PausedList() map[string]string {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	out := make(map[string]string, len(t.paused))
+	for k, v := range t.paused {
 		out[k] = v
 	}
 	return out
 }
 
 // MassPause pauses all compensations that are not already paused.
-func (s *CompensationCostStore) MassPause(reason string) []string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+func (t *CompensationCostTracker) MassPause(reason string) []string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	var paused []string
-	for name, c := range s.costs {
+	for name, c := range t.costs {
 		if !c.Paused {
 			c.Paused = true
 			c.PausedReason = reason
-			s.paused[name] = reason
+			t.paused[name] = reason
 			paused = append(paused, name)
 		}
 	}
@@ -294,29 +295,29 @@ func (s *CompensationCostStore) MassPause(reason string) []string {
 // price, it auto-pauses ALL compensations and returns a prominent notice.
 // For smaller changes, it returns the list of compensations affected so the
 // caller can offer mass-pause via UI.
-func (s *CompensationCostStore) OnPriceChange(model string, newPromptPrice, newCompletionPrice float64) *PriceChangeResult {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+func (t *CompensationCostTracker) OnPriceChange(model string, newPromptPrice, newCompletionPrice float64) *PriceChangeResult {
+	t.mu.Lock()
+	defer t.mu.Unlock()
 
 	// Check for extreme spike.
-	sd := s.spikeDetectors[model]
+	sd := t.spikeDetectors[model]
 	if sd == nil {
 		sd = NewSpikeDetector(model)
-		s.spikeDetectors[model] = sd
+		t.spikeDetectors[model] = sd
 	}
 	isSpike, spikeRatio := sd.Detect(newPromptPrice, newCompletionPrice)
 
 	result := &PriceChangeResult{
-		Model:             model,
-		NewPromptPrice:    newPromptPrice,
+		Model:              model,
+		NewPromptPrice:     newPromptPrice,
 		NewCompletionPrice: newCompletionPrice,
-		IsSpike:           isSpike,
-		SpikeRatio:        spikeRatio,
+		IsSpike:            isSpike,
+		SpikeRatio:         spikeRatio,
 	}
 
 	// Recalculate cost estimates for all compensations at the new price.
 	var affected []string
-	for name, c := range s.costs {
+	for name, c := range t.costs {
 		oldCost := c.EstimatedCost
 		c.SetPricing(newPromptPrice, newCompletionPrice)
 		newCost := c.EstimatedCost
@@ -331,11 +332,11 @@ func (s *CompensationCostStore) OnPriceChange(model string, newPromptPrice, newC
 
 	// On extreme spike (10×+): auto-pause all compensations.
 	if isSpike {
-		for name, c := range s.costs {
+		for name, c := range t.costs {
 			if !c.Paused {
 				c.Paused = true
 				c.PausedReason = fmt.Sprintf("auto-paused: %s price spiked %.1f×", model, spikeRatio)
-				s.paused[name] = c.PausedReason
+				t.paused[name] = c.PausedReason
 				result.AutoPaused = append(result.AutoPaused, name)
 			}
 		}
@@ -370,7 +371,9 @@ func (r *PriceChangeResult) HasNotableChanges() bool {
 }
 
 // SpikeDetector detects extreme price spikes (10× or more) by comparing new
-// provider pricing against the last recorded baseline.
+// provider pricing against the last recorded baseline. On a provider price
+// change it recalculates spend for all compensations. An extreme spike of 10×
+// or more triggers auto-pause of all compensations with a notice.
 type SpikeDetector struct {
 	Model string `json:"model"`
 
@@ -434,6 +437,17 @@ func (d *SpikeDetector) Baseline() (promptPrice, completionPrice float64) {
 	return d.lastPromptPrice, d.lastCompletionPrice
 }
 
+// RecalculateAll recomputes the estimated cost for every tracked compensation
+// using the given prices. Call this after a provider price change that does not
+// need the full OnPriceChange spike/mass-pause machinery.
+func (t *CompensationCostTracker) RecalculateAll(pricePerMPrompt, pricePerMCompletion float64) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for _, c := range t.costs {
+		c.SetPricing(pricePerMPrompt, pricePerMCompletion)
+	}
+}
+
 // BuildMassPauseNotice constructs a user-visible notice describing the pause
 // action taken. It includes the reason, the list of paused compensations, and
 // instructions for re-enabling them.
@@ -449,8 +463,9 @@ func BuildMassPauseNotice(reason string, paused []string) string {
 	return b.String()
 }
 
-// Recorder is an interface for recording compensation token usage, so cost
-// tracking can be injected without a concrete dependency on CompensationCostStore.
+// CompensationRecorder is an interface for recording compensation token usage,
+// so cost tracking can be injected without a concrete dependency on
+// CompensationCostTracker.
 type CompensationRecorder interface {
 	RecordCompensation(ctx context.Context, name string, usage provider.Usage)
 }
@@ -469,7 +484,7 @@ func CompensationRecorderFromContext(ctx context.Context) CompensationRecorder {
 	return r
 }
 
-// RecordCompensation implements CompensationRecorder on CompensationCostStore.
-func (s *CompensationCostStore) RecordCompensation(ctx context.Context, name string, usage provider.Usage) {
-	s.Record(name, usage)
+// RecordCompensation implements CompensationRecorder on CompensationCostTracker.
+func (t *CompensationCostTracker) RecordCompensation(ctx context.Context, name string, usage provider.Usage) {
+	t.Record(name, usage)
 }

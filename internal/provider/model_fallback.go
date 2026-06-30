@@ -15,10 +15,8 @@ package provider
 
 import (
 	"context"
-	"math"
 	"net/http"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
@@ -665,6 +663,3 @@ func max(x, y int) int {
 	}
 	return y
 }
-
-// sentinel used by RecordResult to simplify zero-value detection.
-var _ = math.MaxFloat64 // avoid unused import; math imported for completeness

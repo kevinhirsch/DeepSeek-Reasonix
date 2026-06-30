@@ -1,186 +1,169 @@
+// Package agent — compensation_chain.go: trigger-chain tracking for compensations.
+//
+// When one compensation's output triggers another compensation (e.g., speculative
+// execution flags an ambiguity -> cross-validation fires), the chain is recorded
+// here. Chains are capped at depth 5 to prevent runaway cascades, and each step
+// is logged for cost analysis so teams can identify expensive trigger paths and
+// tune or disable them.
 package agent
 
 import (
+	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
 )
 
-// MaxChainDepth is the maximum number of cascading compensations allowed before
-// the chain is capped. When compensation A triggers B, and B triggers C, and so
-// on, depth 5 is the hard limit.
-const MaxChainDepth = 5
-
-// ChainLink records one link in a compensation trigger chain: compensation A
-// (the trigger) produced output that caused compensation B (the triggered) to
-// be invoked.
-type ChainLink struct {
-	// Trigger is the compensation that caused the cascade (e.g. "speculative").
-	Trigger string `json:"trigger"`
-	// Triggered is the compensation triggered by the output (e.g. "postprocess").
-	Triggered string `json:"triggered"`
-	// TriggerReason is a short human-readable description of why the trigger
-	// caused the downstream compensation to fire.
-	TriggerReason string `json:"trigger_reason"`
-	// Depth is the position of this link in the chain (1-based).
+// ChainStep is one link in a compensation trigger chain.
+type ChainStep struct {
+	// Depth is the 1-based position in the chain (1 = origin).
 	Depth int `json:"depth"`
-	// Timestamp records when the chain link was created.
+
+	// TriggerCompensation is the name of the compensation that was running
+	// when the trigger fired.
+	TriggerCompensation string `json:"trigger_compensation"`
+
+	// TriggeredCompensation is the name of the compensation that was triggered
+	// in response.
+	TriggeredCompensation string `json:"triggered_compensation"`
+
+	// Reason is a human-readable explanation of why the trigger fired (e.g.,
+	// "speculative output ambiguity threshold exceeded").
+	Reason string `json:"reason"`
+
+	// Timestamp is when this chain step was recorded.
 	Timestamp time.Time `json:"timestamp"`
-	// ChainID links together all ChainLinks in the same cascade.
-	ChainID string `json:"chain_id"`
-	// TotalTokensAtLink tracks cumulative tokens across the chain up to this link.
-	TotalTokensAtLink int `json:"total_tokens_at_link"`
+
+	// SubagentID is the subagent whose turn produced this trigger (empty if
+	// triggered from the parent agent).
+	SubagentID string `json:"subagent_id,omitempty"`
+
+	// TokenCost is the estimated tokens consumed by the triggered compensation
+	// (populated retroactively when the triggered compensation completes).
+	TokenCost int `json:"token_cost,omitempty"`
 }
 
-// CompensationChain tracks chains of escalating compensation calls so costs
-// can be attributed and runaway cascades can be stopped.
-type CompensationChain struct {
-	// ID uniquely identifies this chain for cost attribution.
+// Chain is a complete compensation trigger chain. A chain starts when the first
+// compensation is triggered (its output becomes the first step's trigger) and
+// grows as each step fires further compensations. Depth is capped at 5.
+type Chain struct {
+	// ID uniquely identifies the chain for log correlation.
 	ID string `json:"id"`
-	// Depth is the current number of compensations in this chain.
-	Depth int `json:"depth"`
-	// Links is the ordered list of trigger→triggered transitions.
-	Links []ChainLink `json:"links"`
-	// RootCause is the name of the compensation that started the chain.
+
+	// RootCause is the original event that started the chain (e.g., "user turn",
+	// "subagent result processing").
 	RootCause string `json:"root_cause"`
-	// TotalTokens tracks cumulative token spend across all links.
-	TotalTokens int `json:"total_tokens"`
-	// CappedAt indicates whether this chain was capped (MaxChainDepth reached).
-	CappedAt int `json:"capped_at,omitempty"`
-	// CreatedAt is when the chain started.
-	CreatedAt time.Time `json:"created_at"`
-	// LastActivity is when the most recent link was added.
-	LastActivity time.Time `json:"last_activity"`
+
+	// StartedAt is when the first step was recorded.
+	StartedAt time.Time `json:"started_at"`
+
+	// EndedAt is when the chain was closed (depth cap reached or no further
+	// triggers). Zero if still open.
+	EndedAt time.Time `json:"ended_at,omitempty"`
+
+	// Steps is the ordered list of trigger steps, oldest first.
+	Steps []ChainStep `json:"steps"`
+
+	// TotalTokenCost is the sum of all TokenCost values in steps.
+	TotalTokenCost int `json:"total_token_cost"`
+
+	// Capped is true when the chain reached the maximum depth and was forcibly
+	// terminated.
+	Capped bool `json:"capped"`
 }
 
-// Summary returns a one-line description of the chain for logging.
-func (c *CompensationChain) Summary() string {
-	var b strings.Builder
-	fmt.Fprintf(&b, "chain %s: depth=%d/%d root=%s tokens=%d links=[",
-		c.ID, c.Depth, MaxChainDepth, c.RootCause, c.TotalTokens)
-	for i, link := range c.Links {
-		if i > 0 {
-			b.WriteString(" → ")
-		}
-		fmt.Fprintf(&b, "%s→%s", link.Trigger, link.Triggered)
-	}
-	b.WriteString("]")
-	if c.CappedAt > 0 {
-		fmt.Fprintf(&b, " CAPPED")
-	}
-	return b.String()
-}
-
-// CostReport returns a detailed breakdown of the chain's token cost per link.
-func (c *CompensationChain) CostReport() string {
-	var b strings.Builder
-	fmt.Fprintf(&b, "# Chain %s Cost Report\n\n", c.ID)
-	fmt.Fprintf(&b, "Root cause: %s\n", c.RootCause)
-	fmt.Fprintf(&b, "Depth: %d (max %d)\n", c.Depth, MaxChainDepth)
-	fmt.Fprintf(&b, "Total tokens: %d\n", c.TotalTokens)
-	if c.CappedAt > 0 {
-		fmt.Fprintf(&b, "⚠ Capped at depth %d\n\n", c.CappedAt)
-	} else {
-		b.WriteString("\n")
-	}
-	for _, link := range c.Links {
-		fmt.Fprintf(&b, "  L%d: %s → %s  %q  (%d tokens)\n",
-			link.Depth, link.Trigger, link.Triggered, link.TriggerReason, link.TotalTokensAtLink)
-	}
-	return b.String()
-}
-
-// CompensationChainTracker maintains a registry of active and historical
-// compensation chains. It caps chain depth at MaxChainDepth and provides
-// cost analysis across chains.
+// CompensationChainTracker records compensation trigger chains and enforces the
+// maximum depth cap of 5. It is the single source of truth for understanding
+// which compensations cascade into others and what the total cost of each chain
+// is.
 type CompensationChainTracker struct {
-	mu sync.RWMutex
+	mu     sync.Mutex
+	chains []*Chain
+	active map[string]*Chain // chain ID -> chain (currently open)
+	closed []*Chain          // completed chains
 
-	// active is the chain currently being built for each chain ID.
-	active map[string]*CompensationChain
-
-	// history stores completed chains for cost analysis.
-	history []*CompensationChain
-
-	// chainIdx is a monotonic counter for generating chain IDs.
-	chainIdx int
-
-	// totalTokensAcrossAllChains tracks lifetime tokens across all chains.
-	totalTokensAcrossAllChains int
-
-	// cappedCount tracks how many chains were capped at MaxChainDepth.
-	cappedCount int
+	maxDepth int
 }
 
-// NewCompensationChainTracker creates a chain tracker.
+// NewCompensationChainTracker creates a chain tracker with the default depth cap
+// of 5.
 func NewCompensationChainTracker() *CompensationChainTracker {
 	return &CompensationChainTracker{
-		active: make(map[string]*CompensationChain),
+		maxDepth: 5,
+		active:   make(map[string]*Chain),
 	}
 }
 
-// StartChain begins a new compensation chain with the given root compensation
-// as the initiator. Returns the chain ID. If the root is already deeper than
-// allowed, it returns an empty string and the chain is not started.
-func (t *CompensationChainTracker) StartChain(rootCompensation string) string {
+// WithMaxDepth overrides the default depth cap. The caller must ensure the value
+// is positive.
+func (t *CompensationChainTracker) WithMaxDepth(depth int) *CompensationChainTracker {
+	if depth > 0 {
+		t.maxDepth = depth
+	}
+	return t
+}
+
+// BeginChain starts a new compensation trigger chain and returns its ID. The
+// rootCause describes what initiated the chain (e.g., "user turn 3",
+// "subagent ref=abc123 result processing").
+func (t *CompensationChainTracker) BeginChain(rootCause string) string {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	t.chainIdx++
-	id := fmt.Sprintf("cc-%d", t.chainIdx)
-
-	chain := &CompensationChain{
-		ID:         id,
-		Depth:      0,
-		RootCause:  rootCompensation,
-		CreatedAt:  time.Now().UTC(),
-		LastActivity: time.Now().UTC(),
+	chain := &Chain{
+		ID:        fmt.Sprintf("chain-%d-%s", time.Now().UnixNano(), randomSuffixChain(6)),
+		RootCause: rootCause,
+		StartedAt: time.Now().UTC(),
 	}
-	t.active[id] = chain
-	return id
+	t.chains = append(t.chains, chain)
+	t.active[chain.ID] = chain
+	return chain.ID
 }
 
-// AddLink adds a trigger→triggered link to an active chain. Returns false and
-// an error if the chain would exceed MaxChainDepth. When capped, the chain is
-// automatically closed.
-func (t *CompensationChainTracker) AddLink(chainID, trigger, triggered, reason string, tokens int) (bool, error) {
+// RecordStep appends a step to an existing chain. Returns false with an error
+// if the chain is unknown or has already reached the depth cap (in which case
+// the step is not recorded).
+//
+// When the depth cap is reached, the chain is automatically closed with
+// Capped = true, and the caller should NOT fire the triggered compensation.
+func (t *CompensationChainTracker) RecordStep(chainID string, step ChainStep) (bool, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
 	chain, ok := t.active[chainID]
 	if !ok {
-		return false, fmt.Errorf("chain %s not found", chainID)
+		return false, fmt.Errorf("unknown chain %q", chainID)
 	}
 
-	if chain.Depth >= MaxChainDepth {
-		// Cap the chain — this link is refused.
-		chain.CappedAt = chain.Depth
-		t.closeChainLocked(chain)
+	step.Depth = len(chain.Steps) + 1
+	if step.Timestamp.IsZero() {
+		step.Timestamp = time.Now().UTC()
+	}
+
+	if step.Depth > t.maxDepth {
+		chain.Capped = true
+		chain.EndedAt = time.Now().UTC()
+		delete(t.active, chainID)
+		t.closed = append(t.closed, chain)
 		return false, fmt.Errorf(
-			"compensation chain %s capped at depth %d: %s → %s refused (reason: %s)",
-			chainID, MaxChainDepth, trigger, triggered, reason)
+			"chain %q depth cap (%d) reached; step from %s -> %s not recorded",
+			chainID, t.maxDepth, step.TriggerCompensation, step.TriggeredCompensation)
 	}
 
-	chain.Depth++
-	link := ChainLink{
-		Trigger:           trigger,
-		Triggered:         triggered,
-		TriggerReason:     reason,
-		Depth:             chain.Depth,
-		Timestamp:         time.Now().UTC(),
-		ChainID:           chainID,
-		TotalTokensAtLink: chain.TotalTokens + tokens,
+	chain.Steps = append(chain.Steps, step)
+
+	// If we just hit depth cap on this step, still record it but mark capped.
+	if step.Depth == t.maxDepth {
+		chain.Capped = true
 	}
-	chain.Links = append(chain.Links, link)
-	chain.TotalTokens += tokens
-	chain.LastActivity = time.Now().UTC()
-	t.totalTokensAcrossAllChains += tokens
 
 	return true, nil
 }
 
-// CloseChain finalises an active chain and moves it to history.
+// CloseChain finalises a chain that completed normally (no cap reached). Sets
+// the end time and moves it from active to closed.
 func (t *CompensationChainTracker) CloseChain(chainID string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -189,146 +172,203 @@ func (t *CompensationChainTracker) CloseChain(chainID string) {
 	if !ok {
 		return
 	}
-	t.closeChainLocked(chain)
-}
-
-func (t *CompensationChainTracker) closeChainLocked(chain *CompensationChain) {
-	t.history = append(t.history, chain)
-	if chain.CappedAt > 0 {
-		t.cappedCount++
-	}
+	chain.EndedAt = time.Now().UTC()
 	delete(t.active, chainID)
+	t.closed = append(t.closed, chain)
 }
 
-// ActiveChains returns the chain IDs currently being built.
-func (t *CompensationChainTracker) ActiveChains() []string {
-	t.mu.RLock()
-	defer t.mu.RUnlock()
-	var ids []string
-	for id := range t.active {
-		ids = append(ids, id)
-	}
-	return ids
-}
+// UpdateStepCost retroactively sets the token cost on a chain step. The caller
+// provides the chain ID and step index (0-based).
+func (t *CompensationChainTracker) UpdateStepCost(chainID string, stepIndex int, tokenCost int) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
 
-// GetChain returns a chain by ID, searching both active and history.
-func (t *CompensationChainTracker) GetChain(chainID string) *CompensationChain {
-	t.mu.RLock()
-	defer t.mu.RUnlock()
-	if c, ok := t.active[chainID]; ok {
-		return c
-	}
-	for _, c := range t.history {
-		if c.ID == chainID {
-			return c
-		}
-	}
-	return nil
-}
-
-// History returns all completed chains, most recent first.
-func (t *CompensationChainTracker) History() []*CompensationChain {
-	t.mu.RLock()
-	defer t.mu.RUnlock()
-	out := make([]*CompensationChain, len(t.history))
-	copy(out, t.history)
-	// Reverse so most recent is first.
-	for i, j := 0, len(out)-1; i < j; i, j = i+1, j-1 {
-		out[i], out[j] = out[j], out[i]
-	}
-	return out
-}
-
-// CostAnalysisReport returns a report summarising cost across all chains,
-// suitable for display in the Settings → Compensations dashboard.
-func (t *CompensationChainTracker) CostAnalysisReport() string {
-	t.mu.RLock()
-	defer t.mu.RUnlock()
-
-	var b strings.Builder
-	b.WriteString("# Compensation Chain Cost Analysis\n\n")
-	fmt.Fprintf(&b, "Total chains tracked: %d\n", len(t.history)+len(t.active))
-	fmt.Fprintf(&b, "Completed chains: %d\n", len(t.history))
-	fmt.Fprintf(&b, "Active chains: %d\n", len(t.active))
-	fmt.Fprintf(&b, "Capped chains (depth %d): %d\n", MaxChainDepth, t.cappedCount)
-	fmt.Fprintf(&b, "Total tokens across all chains: %d\n\n", t.totalTokensAcrossAllChains)
-
-	// Per-root-cause breakdown.
-	rootCost := make(map[string]int)
-	rootCount := make(map[string]int)
-	for _, c := range t.history {
-		rootCost[c.RootCause] += c.TotalTokens
-		rootCount[c.RootCause]++
-	}
-	for _, c := range t.active {
-		rootCost[c.RootCause] += c.TotalTokens
-		rootCount[c.RootCause]++
-	}
-
-	if len(rootCost) > 0 {
-		b.WriteString("## By root cause\n\n")
-		for root, tokens := range rootCost {
-			fmt.Fprintf(&b, "- %s: %d chains, %d tokens\n", root, rootCount[root], tokens)
-		}
-	}
-
-	// Average chain depth.
-	var totalDepth int
-	totalCompleted := len(t.history)
-	for _, c := range t.history {
-		totalDepth += c.Depth
-	}
-	if totalCompleted > 0 {
-		avgDepth := float64(totalDepth) / float64(totalCompleted)
-		fmt.Fprintf(&b, "\nAverage chain depth: %.1f (max %d)\n", avgDepth, MaxChainDepth)
-	}
-
-	return b.String()
-}
-
-// MostExpensiveChains returns the top N chains by token cost.
-func (t *CompensationChainTracker) MostExpensiveChains(n int) []*CompensationChain {
-	t.mu.RLock()
-	defer t.mu.RUnlock()
-
-	// Combine active and history for ranking.
-	all := make([]*CompensationChain, 0, len(t.history)+len(t.active))
-	all = append(all, t.history...)
-	for _, c := range t.active {
-		all = append(all, c)
-	}
-
-	// Sort by TotalTokens descending (bubble sort since n is small).
-	for i := 0; i < len(all)-1; i++ {
-		for j := i + 1; j < len(all); j++ {
-			if all[j].TotalTokens > all[i].TotalTokens {
-				all[i], all[j] = all[j], all[i]
+	// Check active and closed chains.
+	for _, chains := range [][]*Chain{t.activeValues(), t.closed} {
+		for _, chain := range chains {
+			if chain.ID == chainID && stepIndex >= 0 && stepIndex < len(chain.Steps) {
+				chain.Steps[stepIndex].TokenCost = tokenCost
+				// Recompute total.
+				total := 0
+				for _, s := range chain.Steps {
+					total += s.TokenCost
+				}
+				chain.TotalTokenCost = total
+				return
 			}
 		}
 	}
-
-	if n > len(all) {
-		n = len(all)
-	}
-	return all[:n]
 }
 
-// CappedCount returns how many chains have been capped at MaxChainDepth.
-func (t *CompensationChainTracker) CappedCount() int {
-	t.mu.RLock()
-	defer t.mu.RUnlock()
-	return t.cappedCount
+// activeValues returns a slice of active chains while the caller holds the lock.
+func (t *CompensationChainTracker) activeValues() []*Chain {
+	vals := make([]*Chain, 0, len(t.active))
+	for _, c := range t.active {
+		vals = append(vals, c)
+	}
+	return vals
 }
 
-// CheckDepthBeforeLink is a helper that checks whether adding another link
-// to the given chain would exceed MaxChainDepth before calling AddLink.
-// Returns (allowed, currentDepth).
-func (t *CompensationChainTracker) CheckDepthBeforeLink(chainID string) (bool, int) {
-	t.mu.RLock()
-	defer t.mu.RUnlock()
-	chain, ok := t.active[chainID]
-	if !ok {
-		return false, 0
+// ActiveChains returns the currently open chains.
+func (t *CompensationChainTracker) ActiveChains() []*Chain {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	vals := make([]*Chain, 0, len(t.active))
+	for _, c := range t.active {
+		cp := *c
+		vals = append(vals, &cp)
 	}
-	return chain.Depth < MaxChainDepth, chain.Depth
+	return vals
+}
+
+// ClosedChains returns completed chains, most recent first.
+func (t *CompensationChainTracker) ClosedChains() []*Chain {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	vals := make([]*Chain, len(t.closed))
+	for i, c := range t.closed {
+		cp := *c
+		vals[i] = &cp
+	}
+	// Most recent first.
+	sort.Slice(vals, func(i, j int) bool {
+		return vals[i].EndedAt.After(vals[j].EndedAt)
+	})
+	return vals
+}
+
+// AllChains returns every chain (active + closed), most recently started first.
+func (t *CompensationChainTracker) AllChains() []*Chain {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	all := make([]*Chain, 0, len(t.active)+len(t.closed))
+	for _, c := range t.active {
+		cp := *c
+		all = append(all, &cp)
+	}
+	for _, c := range t.closed {
+		cp := *c
+		all = append(all, &cp)
+	}
+	sort.Slice(all, func(i, j int) bool {
+		return all[i].StartedAt.After(all[j].StartedAt)
+	})
+	return all
+}
+
+// CostSummary returns a breakdown of total tokens and number of chains per
+// trigger compensation. Useful for identifying which compensations are the most
+// expensive cascade starters.
+func (t *CompensationChainTracker) CostSummary() map[string]ChainCostSummary {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	summary := make(map[string]ChainCostSummary)
+	all := append([]*Chain(nil), t.activeValues()...)
+	all = append(all, t.closed...)
+
+	for _, chain := range all {
+		for _, step := range chain.Steps {
+			s := summary[step.TriggerCompensation]
+			if s.TriggersInto == nil {
+				s.TriggersInto = make(map[string]int)
+			}
+			s.TriggerCompensation = step.TriggerCompensation
+			s.TriggerCount++
+			s.TotalTokenCost += step.TokenCost
+			if step.TriggeredCompensation != "" {
+				s.TriggersInto[step.TriggeredCompensation]++
+			}
+			summary[step.TriggerCompensation] = s
+		}
+	}
+	return summary
+}
+
+// ChainCostSummary is a per-compensation aggregation of chain costs.
+type ChainCostSummary struct {
+	TriggerCompensation string         `json:"trigger_compensation"`
+	TriggerCount        int            `json:"trigger_count"`
+	TotalTokenCost      int            `json:"total_token_cost"`
+	TriggersInto        map[string]int `json:"triggers_into"`
+}
+
+// CappedChains reports which chains were terminated due to depth cap, with the
+// original root cause and the last step that was recorded.
+func (t *CompensationChainTracker) CappedChains() []CapReport {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	var reports []CapReport
+	for _, chain := range t.closed {
+		if !chain.Capped {
+			continue
+		}
+		r := CapReport{
+			ChainID:   chain.ID,
+			RootCause: chain.RootCause,
+			Depth:     len(chain.Steps),
+		}
+		if len(chain.Steps) > 0 {
+			last := chain.Steps[len(chain.Steps)-1]
+			r.LastStep = fmt.Sprintf("%s -> %s", last.TriggerCompensation, last.TriggeredCompensation)
+		}
+		reports = append(reports, r)
+	}
+	return reports
+}
+
+// CapReport describes a chain that was forcibly terminated.
+type CapReport struct {
+	ChainID   string `json:"chain_id"`
+	RootCause string `json:"root_cause"`
+	Depth     int    `json:"depth"`
+	LastStep  string `json:"last_step"`
+}
+
+// LogChainForCostAnalysis formats a chain as a single-line log entry suitable
+// for structured logging and cost analysis dashboards. Each line contains the
+// chain ID, depth, total tokens, and a compact step trace.
+func LogChainForCostAnalysis(chain *Chain) string {
+	var stepStrs []string
+	for _, s := range chain.Steps {
+		stepStrs = append(stepStrs, fmt.Sprintf("%s->%s(%d)",
+			s.TriggerCompensation, s.TriggeredCompensation, s.TokenCost))
+	}
+	capped := ""
+	if chain.Capped {
+		capped = " [CAPPED]"
+	}
+	return fmt.Sprintf("compensation-chain id=%s root=%s depth=%d tokens=%d trace=%s%s",
+		chain.ID, chain.RootCause, len(chain.Steps), chain.TotalTokenCost,
+		strings.Join(stepStrs, ","), capped)
+}
+
+// randomSuffixChain produces a short random-looking string for chain ID
+// uniqueness without importing crypto.
+func randomSuffixChain(n int) string {
+	const letters = "abcdefghijklmnopqrstuvwxyz0123456789"
+	b := make([]byte, n)
+	ns := time.Now().UnixNano()
+	for i := range b {
+		b[i] = letters[int(ns>>uint(i*5))%len(letters)]
+	}
+	return string(b)
+}
+
+// compensationChainCtxKey is the context key for a CompensationChainTracker.
+type compensationChainCtxKey struct{}
+
+// WithChainTracker attaches a CompensationChainTracker to the context so
+// compensations can record trigger steps without a global singleton.
+func WithChainTracker(ctx context.Context, t *CompensationChainTracker) context.Context {
+	return context.WithValue(ctx, compensationChainCtxKey{}, t)
+}
+
+// ChainTrackerFromContext retrieves the CompensationChainTracker from a context,
+// or nil if none was attached.
+func ChainTrackerFromContext(ctx context.Context) *CompensationChainTracker {
+	t, _ := ctx.Value(compensationChainCtxKey{}).(*CompensationChainTracker)
+	return t
 }

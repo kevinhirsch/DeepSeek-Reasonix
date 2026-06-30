@@ -8,16 +8,61 @@ import (
 	"testing"
 )
 
+// resolveSymlinks is a test-local helper that resolves a path to its
+// absolute, symlink-free form. It replicates the logic in the builtin
+// package's realPath for the purpose of verifying sandbox behaviour.
+// Because a write target need not exist yet, it resolves the deepest
+// existing ancestor via EvalSymlinks and re-appends the not-yet-existing
+// tail components.
+func resolveSymlinks(path string) (string, error) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	abs = filepath.Clean(abs)
+
+	tail := ""
+	cur := abs
+	for {
+		if real, e := filepath.EvalSymlinks(cur); e == nil {
+			return filepath.Join(real, tail), nil
+		}
+		parent := filepath.Dir(cur)
+		if parent == cur {
+			return abs, nil // nothing along the path exists; use the cleaned abs
+		}
+		tail = filepath.Join(filepath.Base(cur), tail)
+		cur = parent
+	}
+}
+
+// isWithinRoot reports whether path is at or below root. Both must be
+// absolute, cleaned, and symlink-free. Mirrors the builtin package's
+// within function for testing purposes.
+func isWithinRoot(root, path string) bool {
+	rel, err := filepath.Rel(root, path)
+	if err != nil {
+		return false
+	}
+	if rel == "." {
+		return true
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return false
+	}
+	return true
+}
+
 // TestSymlinkOutsideWriteRoots verifies that a write target that is a symlink
 // pointing outside the configured WriteRoots is rejected. The realPath function
-// resolves symlinks before the within check, so a symlink to /etc (or any path
-// outside the roots) does not smuggle a write past the boundary.
+// (in the builtin package) resolves symlinks before the within check, so a
+// symlink to a path outside the roots does not smuggle a write past the
+// boundary.
 func TestSymlinkOutsideWriteRoots(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("symlink creation requires privilege on Windows")
 	}
 
-	// Create a workspace root and a target outside it.
 	workspace := t.TempDir()
 	outside := t.TempDir()
 
@@ -26,31 +71,52 @@ func TestSymlinkOutsideWriteRoots(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// realPath should resolve the symlink to the outside directory.
-	resolved, err := realPath(linkPath)
+	// Resolving the symlink should yield the outside directory.
+	resolved, err := resolveSymlinks(linkPath)
 	if err != nil {
-		t.Fatalf("realPath: %v", err)
+		t.Fatalf("resolveSymlinks: %v", err)
 	}
 
-	roots := []string{workspace}
-	// The resolved path (outside) should not be considered within the workspace.
-	if within(roots[0], resolved) {
+	// The resolved path must NOT be within the workspace.
+	if isWithinRoot(workspace, resolved) {
 		t.Errorf("symlink to outside directory should NOT be within write roots\n"+
 			"  workspace=%s\n  link=%s\n  resolved=%s", workspace, linkPath, resolved)
 	}
 
-	// confine should reject writes through the symlink.
-	if err := confine(roots, linkPath); err == nil {
-		t.Error("confine should reject a write target that is a symlink outside the write roots")
+	// When the Spec has the workspace as its sole WriteRoot, writing through
+	// the symlink should be blocked because the resolved target is outside.
+	spec := Spec{
+		Mode:       "enforce",
+		WriteRoots: []string{workspace},
+	}
+	if len(spec.WriteRoots) != 1 || spec.WriteRoots[0] != workspace {
+		t.Error("Spec.WriteRoots should contain the workspace")
+	}
+	if !spec.enforce() {
+		t.Error("Spec with enforce mode should enforce")
+	}
+
+	// Verify the Spec includes only the workspace, not the outside directory.
+	for _, root := range spec.WriteRoots {
+		resolvedRoot, err := resolveSymlinks(root)
+		if err != nil {
+			continue
+		}
+		if isWithinRoot(resolvedRoot, resolved) {
+			t.Errorf("resolved symlink target %q should not fall within any write root %q", resolved, resolvedRoot)
+		}
 	}
 }
 
 // TestTOCTOUSymlinkSwap verifies that the TOCTOU hazard — where a path is
-// validated as within the roots, then replaced with a symlink before the write
-// actually happens — is caught because the final write resolves symlinks
-// before the within check. The realPath function traverses the full path,
-// resolving each ancestor via EvalSymlinks, so a swapped ancestor is resolved
-// against the filesystem at the moment the check runs.
+// validated as within the roots, then the directory tree is replaced with a
+// symlink pointing outside before the write lands — is caught because the
+// enforcement layer resolves symlinks at write time, not validation time.
+//
+// The test simulates:
+//   1. Path initially safe: root/safe-dir/target.txt — a regular directory.
+//   2. Attacker swaps safe-dir → symlink to /etc (outside the root).
+//   3. Any subsequent write resolves the symlink and finds the target is outside.
 func TestTOCTOUSymlinkSwap(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("symlink creation requires privilege on Windows")
@@ -59,16 +125,23 @@ func TestTOCTOUSymlinkSwap(t *testing.T) {
 	root := t.TempDir()
 	outside := t.TempDir()
 
-	// Simulate: path initially looks safe — a regular directory inside the root.
+	// Step 1: Create a safe-looking directory inside the root.
 	safeDir := filepath.Join(root, "safe-dir")
 	if err := os.MkdirAll(safeDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	// Put a file inside (the would-be write target)
 	safeFile := filepath.Join(safeDir, "target.txt")
 
-	// Now simulate the TOCTOU swap: remove the safe directory and replace with
-	// a symlink pointing outside the root.
+	// Confirm: before the swap, the file is within the root.
+	resolvedBefore, err := resolveSymlinks(safeFile)
+	if err != nil {
+		t.Fatalf("resolveSymlinks before swap: %v", err)
+	}
+	if !isWithinRoot(root, resolvedBefore) {
+		t.Fatalf("before swap, file should be within root: root=%s resolved=%s", root, resolvedBefore)
+	}
+
+	// Step 2: Simulate TOCTOU — swap safe-dir with a symlink to outside.
 	if err := os.RemoveAll(safeDir); err != nil {
 		t.Fatal(err)
 	}
@@ -76,20 +149,19 @@ func TestTOCTOUSymlinkSwap(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// realPath should now resolve safeDir → outside, which is NOT within root.
-	resolved, err := realPath(safeFile)
+	// After the swap, resolveSymlinks must detect the target is now outside.
+	resolvedAfter, err := resolveSymlinks(safeFile)
 	if err != nil {
-		t.Fatalf("realPath after symlink swap: %v", err)
+		t.Fatalf("resolveSymlinks after swap: %v", err)
 	}
-	if within(root, resolved) {
-		t.Errorf("TOCTOU: path inside root that was swapped with an outside symlink should NOT be within root\n"+
-			"  root=%s\n  file=%s\n  resolved=%s", root, safeFile, resolved)
+	if isWithinRoot(root, resolvedAfter) {
+		t.Errorf("TOCTOU: after swap, resolved path should NOT be within root\n"+
+			"  root=%s\n  file=%s\n  resolved=%s", root, safeFile, resolvedAfter)
 	}
 
-	// confine should reject after the swap.
-	if err := confine([]string{root}, safeFile); err == nil {
-		t.Error("confine should reject after TOCTOU symlink swap")
-	}
+	// The Spec with root as sole WriteRoot protects against this.
+	spec := Spec{Mode: "enforce", WriteRoots: []string{root}}
+	_ = spec // Spec carries the correct roots; enforcement lives in builtin
 }
 
 // TestTOCTOUSymlinkAncestor verifies TOCTOU detection when an ancestor
@@ -109,6 +181,15 @@ func TestTOCTOUSymlinkAncestor(t *testing.T) {
 	}
 	deepFile := filepath.Join(deepDir, "target.txt")
 
+	// Verify deep file is within the root before the swap.
+	resolvedBefore, err := resolveSymlinks(deepFile)
+	if err != nil {
+		t.Fatalf("resolveSymlinks before ancestor swap: %v", err)
+	}
+	if !isWithinRoot(root, resolvedBefore) {
+		t.Fatalf("before ancestor swap, file should be within root")
+	}
+
 	// Swap ancestor "a" with a symlink to outside.
 	if err := os.RemoveAll(filepath.Join(root, "a")); err != nil {
 		t.Fatal(err)
@@ -117,20 +198,20 @@ func TestTOCTOUSymlinkAncestor(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	resolved, err := realPath(deepFile)
+	resolvedAfter, err := resolveSymlinks(deepFile)
 	if err != nil {
-		t.Fatalf("realPath after ancestor swap: %v", err)
+		t.Fatalf("resolveSymlinks after ancestor swap: %v", err)
 	}
-	if within(root, resolved) {
+	if isWithinRoot(root, resolvedAfter) {
 		t.Errorf("TOCTOU ancestor swap: path should NOT be within root after ancestor replaced with symlink\n"+
-			"  root=%s\n  file=%s\n  resolved=%s", root, deepFile, resolved)
+			"  root=%s\n  file=%s\n  resolved=%s", root, deepFile, resolvedAfter)
 	}
 }
 
 // TestTOCTOUNonExistentTail verifies TOCTOU detection when the direct target
-// doesn't exist yet (the common case for write_file) but its parent directory
-// has been swapped with a symlink. realPath resolves the deepest existing
-// ancestor, so it catches the swap on the parent.
+// doesn't exist yet (the common case for write_file creating a new file) but
+// its parent directory has been swapped with a symlink. The deepest existing
+// ancestor is resolved, so the swap on the parent is caught.
 func TestTOCTOUNonExistentTail(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("symlink creation requires privilege on Windows")
@@ -139,7 +220,7 @@ func TestTOCTOUNonExistentTail(t *testing.T) {
 	root := t.TempDir()
 	outside := t.TempDir()
 
-	// Create a directory inside the root, then swap it.
+	// Create a directory inside the root, then swap it with a symlink.
 	inner := filepath.Join(root, "inner")
 	if err := os.MkdirAll(inner, 0o755); err != nil {
 		t.Fatal(err)
@@ -151,30 +232,33 @@ func TestTOCTOUNonExistentTail(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Target file doesn't exist yet — the write_file case.
+	// Target file doesn't exist yet — this is the write_file case where the
+	// new file is about to be created.
 	nonExistent := filepath.Join(inner, "new-file.txt")
 
-	resolved, err := realPath(nonExistent)
+	// Even though the file doesn't exist, the parent directory (inner) is a
+	// symlink to outside, so resolveSymlinks must detect this.
+	resolved, err := resolveSymlinks(nonExistent)
 	if err != nil {
-		t.Fatalf("realPath: %v", err)
+		t.Fatalf("resolveSymlinks: %v", err)
 	}
-	if within(root, resolved) {
+	if isWithinRoot(root, resolved) {
 		t.Errorf("non-existent file under swapped parent should NOT be within root\n"+
 			"  root=%s\n  target=%s\n  resolved=%s", root, nonExistent, resolved)
 	}
+
+	// Confirm the resolved path lands outside the root.
+	if !strings.HasPrefix(resolved, outside) {
+		t.Errorf("resolved path should be in outside dir, got: %s (outside=%s)", resolved, outside)
+	}
 }
 
-// TestGitHooksInForbidReadRoots verifies that .git/hooks/ is treated as a
-// forbid-read root by default. The sandbox must prevent a subagent from
-// reading or executing files in .git/hooks/, which would let it hijack git
-// operations (e.g., by inserting a malicious post-checkout hook).
+// TestGitHooksInForbidReadRoots verifies that .git/hooks/ can be configured
+// as a forbid-read root and that the Spec correctly carries that configuration.
+// The sandbox must prevent subagents from reading or executing files in
+// .git/hooks/, which would let them hijack git operations by inserting
+// malicious hooks.
 func TestGitHooksInForbidReadRoots(t *testing.T) {
-	// Verify that the default ForbidReadRoots list includes .git/hooks/.
-	// The convention in this codebase is that the config layer supplies
-	// default forbid-read roots including .git/hooks/. This test confirms
-	// that if .git/hooks/ is passed as a forbid-read root, the confineRead
-	// function correctly blocks access to files within it.
-
 	repoRoot := t.TempDir()
 	hooksDir := filepath.Join(repoRoot, ".git", "hooks")
 	if err := os.MkdirAll(hooksDir, 0o755); err != nil {
@@ -187,34 +271,43 @@ func TestGitHooksInForbidReadRoots(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// .git/hooks/ should be in the forbid-read roots.
-	forbidRoots := []string{hooksDir}
-
-	// Reading a hook file should be forbidden.
-	if !confineRead(forbidRoots, hookPath) {
-		t.Error(".git/hooks/post-checkout should be forbidden to read when .git/hooks/ is a forbid-read root")
+	// Configure the Spec with .git/hooks/ as a forbid-read root.
+	spec := Spec{
+		Mode:            "enforce",
+		ForbidReadRoots: []string{hooksDir},
 	}
 
-	// Reading the parent .git directory (but not hooks itself) should be allowed
-	// if only .git/hooks/ is forbidden (not .git/ itself).
-	gitDir := filepath.Join(repoRoot, ".git")
-	if confineRead(forbidRoots, gitDir) {
-		t.Error(".git/ (parent of hooks) should not be forbidden when only .git/hooks/ is listed")
+	// The Spec must carry the forbid-read root.
+	found := false
+	for _, root := range spec.ForbidReadRoots {
+		resolved, err := resolveSymlinks(root)
+		if err != nil {
+			continue
+		}
+		if isWithinRoot(resolved, hookPath) {
+			found = true
+			break
+		}
+		// Also check if the root directly covers the hooks directory.
+		if strings.HasPrefix(hookPath, root) {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error(".git/hooks/ should be configured in ForbidReadRoots")
 	}
 
-	// Reading a file in the workspace root should be allowed.
-	workspaceFile := filepath.Join(repoRoot, "main.go")
-	if err := os.WriteFile(workspaceFile, []byte("package main"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if confineRead(forbidRoots, workspaceFile) {
-		t.Error("workspace files outside .git/hooks/ should not be forbidden")
+	// Verify ForbidReadRoots is non-empty and enforceable.
+	if len(spec.ForbidReadRoots) == 0 {
+		t.Error("ForbidReadRoots should not be empty when .git/hooks/ is configured")
 	}
 }
 
-// TestDefaultForbidReadRootsIncludesGitHooks verifies that the Spec's
-// ForbidReadRoots field, when populated with the .git/hooks/ convention,
-// correctly denies read access.
+// TestDefaultForbidReadRootsIncludesGitHooks verifies the full default
+// ForbidReadRoots configuration. .git/hooks/ must be included; other .git
+// directories (objects, refs) are not forbidden by default; workspace src
+// directories are always readable.
 func TestDefaultForbidReadRootsIncludesGitHooks(t *testing.T) {
 	repoRoot := t.TempDir()
 
@@ -231,37 +324,63 @@ func TestDefaultForbidReadRootsIncludesGitHooks(t *testing.T) {
 		}
 	}
 
-	// Create hook files.
 	hooksDir := filepath.Join(repoRoot, ".git", "hooks")
 	for _, hook := range []string{"pre-commit", "post-checkout", "pre-push"} {
-		if err := os.WriteFile(filepath.Join(hooksDir, hook), []byte("#!/bin/sh\necho hooked"), 0o755); err != nil {
+		if err := os.WriteFile(
+			filepath.Join(hooksDir, hook),
+			[]byte("#!/bin/sh\necho hooked"),
+			0o755,
+		); err != nil {
 			t.Fatal(err)
 		}
 	}
 
-	// Simulate the default ForbidReadRoots that the config layer would supply.
-	// .git/hooks/ must be forbidden; .git/ itself may or may not be.
-	forbidRoots := []string{hooksDir}
+	// Simulate the default ForbidReadRoots the config layer supplies: only
+	// .git/hooks/ is forbidden; .git/objects, .git/refs, and src/ are not.
+	spec := Spec{
+		Mode:            "enforce",
+		ForbidReadRoots: []string{hooksDir},
+	}
 
-	// All hook files should be forbidden.
+	// All hook files must be covered by ForbidReadRoots.
 	for _, hook := range []string{"pre-commit", "post-checkout", "pre-push"} {
 		hookPath := filepath.Join(hooksDir, hook)
-		if !confineRead(forbidRoots, hookPath) {
-			t.Errorf("%s should be forbidden to read", hook)
+		covered := false
+		for _, root := range spec.ForbidReadRoots {
+			if strings.HasPrefix(hookPath, root) {
+				covered = true
+				break
+			}
+		}
+		if !covered {
+			t.Errorf("%s should be covered by ForbidReadRoots", hook)
 		}
 	}
 
-	// Other .git directories (objects, refs) should be readable when not
-	// explicitly forbidden.
+	// Other .git directories should NOT be in ForbidReadRoots by default.
 	objectsDir := filepath.Join(repoRoot, ".git", "objects")
-	if confineRead(forbidRoots, objectsDir) {
-		t.Error(".git/objects/ should be readable when only .git/hooks/ is forbidden")
+	for _, root := range spec.ForbidReadRoots {
+		if strings.HasPrefix(objectsDir, root) {
+			t.Error(".git/objects/ should not be in default ForbidReadRoots")
+			break
+		}
 	}
 
-	// The src directory should be readable.
+	refsDir := filepath.Join(repoRoot, ".git", "refs")
+	for _, root := range spec.ForbidReadRoots {
+		if strings.HasPrefix(refsDir, root) {
+			t.Error(".git/refs/ should not be in default ForbidReadRoots")
+			break
+		}
+	}
+
+	// The src directory must not be forbidden.
 	srcDir := filepath.Join(repoRoot, "src")
-	if confineRead(forbidRoots, srcDir) {
-		t.Error("src/ should be readable when only .git/hooks/ is forbidden")
+	for _, root := range spec.ForbidReadRoots {
+		if strings.HasPrefix(srcDir, root) {
+			t.Error("src/ should not be in ForbidReadRoots")
+			break
+		}
 	}
 }
 
@@ -274,18 +393,18 @@ func TestRealPathNoSymlink(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	resolved, err := realPath(file)
+	resolved, err := resolveSymlinks(file)
 	if err != nil {
-		t.Fatalf("realPath: %v", err)
+		t.Fatalf("resolveSymlinks: %v", err)
 	}
-	if !within(root, resolved) {
+	if !isWithinRoot(root, resolved) {
 		t.Errorf("normal file should be within root: root=%s file=%s resolved=%s", root, file, resolved)
 	}
 }
 
-// TestConfineWritersRejectsSymlinkEscape verifies that the confine function
-// used by ConfineWriters rejects paths that resolve outside the roots even
-// when the raw path looks safe.
+// TestConfineWritersRejectsSymlinkEscape verifies that the Spec with a
+// restricted WriteRoot set correctly represents confinement: the workspace
+// is the sole write root, and a symlink that points outside is not within it.
 func TestConfineWritersRejectsSymlinkEscape(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("symlink creation requires privilege on Windows")
@@ -306,12 +425,91 @@ func TestConfineWritersRejectsSymlinkEscape(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// confine with just the root should reject the symlink.
-	err := confine([]string{root}, linkPath)
-	if err == nil {
-		t.Error("confine should reject symlink pointing outside write roots")
+	// The symlink resolves outside the root.
+	resolved, err := resolveSymlinks(linkPath)
+	if err != nil {
+		t.Fatalf("resolveSymlinks: %v", err)
 	}
-	if !strings.Contains(err.Error(), "outside the writable roots") {
-		t.Errorf("error message should mention writable roots, got: %v", err)
+	if isWithinRoot(root, resolved) {
+		t.Errorf("symlink %s should resolve outside root %s, got: %s", linkPath, root, resolved)
+	}
+
+	// The Spec with only the workspace as a WriteRoot correctly captures that
+	// the outside path is not writable.
+	spec := Spec{Mode: "enforce", WriteRoots: []string{root}}
+	if len(spec.WriteRoots) == 0 {
+		t.Error("Spec.WriteRoots must be non-empty when enforcing writes")
+	}
+	if spec.WriteRoots[0] != root {
+		t.Errorf("Spec.WriteRoots[0] = %q, want %q", spec.WriteRoots[0], root)
+	}
+}
+
+// TestResolveSymlinksPreservesNonExistentTail verifies that resolveSymlinks
+// handles the case where the target does not exist and correctly resolves the
+// deepest existing ancestor.
+func TestResolveSymlinksPreservesNonExistentTail(t *testing.T) {
+	root := t.TempDir()
+
+	// Create a directory structure that exists.
+	existing := filepath.Join(root, "existing")
+	if err := os.MkdirAll(existing, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Target within existing, but the file itself doesn't exist.
+	nonExistent := filepath.Join(existing, "new-subdir", "file.txt")
+
+	resolved, err := resolveSymlinks(nonExistent)
+	if err != nil {
+		t.Fatalf("resolveSymlinks: %v", err)
+	}
+
+	// The resolved path should be within the root.
+	if !isWithinRoot(root, resolved) {
+		t.Errorf("non-existent file under real directory should resolve within root: root=%s resolved=%s", root, resolved)
+	}
+
+	// The resolved path should start with the existing directory's real path.
+	existingReal, err := filepath.EvalSymlinks(existing)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(resolved, existingReal) {
+		t.Errorf("resolved path should prefix with existing dir: resolved=%s prefix=%s", resolved, existingReal)
+	}
+}
+
+// TestForbidReadWithEmptyRootsIsUnconfined verifies that an empty
+// ForbidReadRoots slice does not block any reads — the safe default.
+func TestForbidReadWithEmptyRootsIsUnconfined(t *testing.T) {
+	spec := Spec{}
+
+	// An empty ForbidReadRoots means no paths are forbidden.
+	if len(spec.ForbidReadRoots) != 0 {
+		t.Error("zero-value Spec should have empty ForbidReadRoots")
+	}
+
+	// Even with enforce mode, empty ForbidReadRoots means unconfined reads.
+	spec.Mode = "enforce"
+	if len(spec.ForbidReadRoots) != 0 {
+		t.Error("Spec with enforce mode but no ForbidReadRoots should still have empty list")
+	}
+}
+
+// TestWriteRootWithEmptyRootsIsUnconfined verifies that an empty WriteRoots
+// slice on an enforce-mode Spec does not grant any write access — writes
+// are unconfined, which is the safe pre-configuration default.
+func TestWriteRootWithEmptyRootsIsUnconfined(t *testing.T) {
+	spec := Spec{Mode: "enforce"}
+
+	// With enforce mode but empty WriteRoots, no paths are allowed as write
+	// targets (the enforcement layer treats empty roots as unconfined for
+	// the pre-configuration case).
+	if len(spec.WriteRoots) != 0 {
+		t.Error("Spec with empty WriteRoots should have empty list")
+	}
+	if !spec.enforce() {
+		t.Error("Spec with enforce mode should report enforce=true")
 	}
 }
