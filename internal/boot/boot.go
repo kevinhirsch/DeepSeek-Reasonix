@@ -266,6 +266,20 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 		}
 	}
 
+	// Quality & behavior rules (Issue #16): anti-overengineering,
+	// evidence-grounded claims, silence default, outcome-first communication.
+	sysPrompt += "\n\n" + qualitySystemPrompt
+	if openai.IsDeepSeek(entry.BaseURL) {
+		sysPrompt += "\n\n" + deepSeekQualityTuning
+	}
+
+	// Effort calibration table (Issue #08): guides model toward correct
+	// reasoning effort per subagent role. Provider-aware variant appended.
+	sysPrompt += "\n\n" + effortCalibrationTable
+	if openai.IsDeepSeek(entry.BaseURL) {
+		sysPrompt += "\n\n(DeepSeek: only high and max are available. Use high for most roles, max for verify, security_review, and complex multi-file tasks.)"
+	}
+
 	// Persistent memory (REASONIX.md / AGENTS.md hierarchy + auto-memory index)
 	// folds into the system prompt exactly here, once: it becomes part of the
 	// durable, cache-stable prefix every turn reuses, so memory costs nothing per
@@ -1897,3 +1911,26 @@ cases, limit output to one sentence.
 Repetition: Once you have decided on an approach, execute it. Do not revisit the same
 decision unless new evidence contradicts it. If a tool call succeeds, trust its output —
 do not re-verify with a second identical call.`
+
+// effortCalibrationTable guides the model toward the correct reasoning effort
+// per subagent role. Appended to the executor system prompt (Issue #08).
+
+// effortCalibrationTable guides the model toward the correct reasoning effort
+// per subagent role. Appended to the executor system prompt (Issue #08).
+const effortCalibrationTable = `## Subagent Effort Calibration
+
+When spawning sub-agents via task, read_only_task, or parallel_tasks, choose the
+effort level based on the sub-agent's role:
+
+| Role | Effort | Why |
+|---|---|---|
+| explore, read_only_task, research | high | Breadth-focused; high is sufficient for search |
+| plan | high | Architecture planning doesn't need deeper reasoning |
+| review, code_review | high | Coverage over depth per individual finding |
+| verify, security_review | max | Must thoroughly attempt refutation and break things |
+| task (complex multi-file change) | max | Cross-cutting changes need comprehensive reasoning |
+| task (simple single-file change) | high | Overthinking adds latency without value |
+
+Provider notes: DeepSeek only supports high and max. Other providers
+(Anthropic, OpenAI) support the full range (low, medium, high, xhigh, max).
+When using DeepSeek, low/medium maps to high and xhigh maps to max automatically.`
