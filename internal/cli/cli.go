@@ -109,6 +109,9 @@ func Run(args []string, version string) int {
 	case "doctor":
 		configureCLIThemeFromConfigNoProbe()
 		return doctorCommand(rest, version)
+	case "remote":
+		configureCLIThemeFromConfigNoProbe()
+		return remoteCommand(rest)
 	case "clone":
 		configureCLIThemeFromConfigNoProbe()
 		return cloneCommand(rest)
