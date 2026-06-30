@@ -1,0 +1,40 @@
+{
+  "role": "reviewer",
+  "model": "",
+  "passed": 3,
+  "failed": 0,
+  "pass_rate": 100,
+  "results": [
+    {
+      "scenario": "report-every-finding",
+      "passed": true,
+      "failures": null,
+      "tokens_in": 150,
+      "tokens_out": 50,
+      "reasoning_tokens": 0,
+      "duration": 0,
+      "transcript": "file:\nCONFIRMED\n"
+    },
+    {
+      "scenario": "specific-failure-scenarios",
+      "passed": true,
+      "failures": null,
+      "tokens_in": 150,
+      "tokens_out": 50,
+      "reasoning_tokens": 0,
+      "duration": 0,
+      "transcript": "panic\nfile:\nline\n"
+    },
+    {
+      "scenario": "distinguish-certainty",
+      "passed": true,
+      "failures": null,
+      "tokens_in": 150,
+      "tokens_out": 50,
+      "reasoning_tokens": 0,
+      "duration": 0,
+      "transcript": "CONFIRMED\nSUSPECTED\n"
+    }
+  ],
+  "cost_est": 0
+}
