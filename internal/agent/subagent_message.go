@@ -110,7 +110,7 @@ func (s *SendToSubagentTool) Execute(ctx context.Context, args json.RawMessage) 
 		return "", fmt.Errorf("message is required")
 	}
 
-	m := MessengerFromCallContext(ctx)
+	m, _ := MessengerFromContext(ctx)
 	if m == nil {
 		return "", fmt.Errorf("subagent messenger is not available in this context")
 	}

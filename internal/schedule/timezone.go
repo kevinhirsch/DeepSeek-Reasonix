@@ -3,7 +3,6 @@ package schedule
 import (
 	"fmt"
 	"os"
-	"strings"
 	"time"
 )
 

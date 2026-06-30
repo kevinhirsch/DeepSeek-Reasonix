@@ -45,7 +45,7 @@ func ResolveRemoteToken(r *RemoteEntry) string {
 		return r.AuthToken
 	}
 	if r.AuthTokenEnv != "" {
-		return strings.TrimSpace(resolveEnvVar(r.AuthTokenEnv))
+		return strings.TrimSpace(os.Getenv(r.AuthTokenEnv))
 	}
 	return ""
 }

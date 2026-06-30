@@ -67,15 +67,14 @@ type callContext struct {
 	parentID string
 	sink     event.Sink
 	asker    Asker
-		planMode  bool
-		messenger *SubagentMessenger
+	planMode bool
 }
 
 // withCallContext stamps ctx with the executing call's ID, the agent's sink, and
 // the asker. executeOne sets this before every Execute; `task` reads it (via
 // CallContext) to nest sub-agent events, and `ask` reads the asker to prompt.
-func withCallContext(ctx context.Context, parentID string, sink event.Sink, asker Asker, planMode bool, messenger *SubagentMessenger) context.Context {
-	return context.WithValue(ctx, callContextKey{}, callContext{parentID: parentID, sink: sink, asker: asker, planMode: planMode, messenger: messenger})
+func withCallContext(ctx context.Context, parentID string, sink event.Sink, asker Asker, planMode bool) context.Context {
+	return context.WithValue(ctx, callContextKey{}, callContext{parentID: parentID, sink: sink, asker: asker, planMode: planMode})
 }
 
 // CallContext returns the executing call's ID, the agent's sink, and the asker,
@@ -86,16 +85,6 @@ func CallContext(ctx context.Context) (parentID string, sink event.Sink, asker A
 	if !ok {
 		return "", nil, nil, false
 	}
-
-// MessengerFromCallContext extracts the SubagentMessenger from a call context.
-// Returns nil when not set (e.g. headless runs without a messenger).
-func MessengerFromCallContext(ctx context.Context) *SubagentMessenger {
-	cc, ok := ctx.Value(callContextKey{}).(callContext)
-	if !ok {
-		return nil
-	}
-	return cc.messenger
-}
 	return cc.parentID, cc.sink, cc.asker, true
 }
 
@@ -278,10 +267,6 @@ type Agent struct {
 	// evidence is a per-user-turn ledger of host-observed tool receipts. It lets
 	// complete_step validate that cited evidence happened before the claim.
 	evidence *evidence.Ledger
-
-	// loopState tracks per-turn reasoning patterns for the DeepSeek cognitive
-	// loop detector (Issue #03). Nil when the provider is not DeepSeek.
-	loopState *cognitiveLoopState
 
 	// todoState is the host's canonical task list: the latest successful
 	// todo_write with completions applied by complete_step. Unlike the per-turn
@@ -762,20 +747,6 @@ type Options struct {
 	// as read-only. It cannot unlock known blocked tools or unsafe bash commands.
 	PlanModeAllowedTools []string
 
-	// InjectPrompt is prepended to the user task at subagent creation time.
-	// When non-empty, it appears before the user's prompt as the first user
-	// message the subagent sees. Used to inject role-specific prompts for
-	// DeepSeek providers that respond better to user-role instructions.
-	InjectPrompt string
-
-	// IsDeepSeek arms the DeepSeek cognitive loop detector. Set from boot.go
-	// via openai.IsDeepSeek(entry.BaseURL) to avoid a circular import in agent.
-	IsDeepSeek bool
-
-	// Messenger is the SubagentMessenger shared across the session.
-	// When non-nil, the send_to_subagent tool can reach running sub-agents.
-	Messenger *SubagentMessenger
-
 	// MemoryCompiler enables Memory v5 execution trace writeback and cache-safe
 	// execution-contract compilation.
 	MemoryCompiler *memorycompiler.Runtime
@@ -844,10 +815,7 @@ func New(prov provider.Provider, tools *tool.Registry, session *Session, opts Op
 		planModeReadOnlyTrust:   planModeReadOnlyTrust,
 		hooks:                   hooks,
 		jobs:                    opts.Jobs,
-			messenger:               opts.Messenger,
 		evidence:                evidence.NewLedger(),
-			loopState:               new(cognitiveLoopState),
-			isDeepSeek:              opts.IsDeepSeek,
 		projectChecks:           append([]instruction.VerifyCheck(nil), opts.ProjectChecks...),
 		contextWindow:           opts.ContextWindow,
 		softCompactRatio:        opts.SoftCompactRatio,
@@ -1017,52 +985,6 @@ func (a *Agent) Run(ctx context.Context, input string) (runErr error) {
 		})
 
 		if len(calls) == 0 {
-			// DeepSeek cognitive loop detection (Issue #03).
-			if a.isDeepSeek && a.loopState != nil {
-				if loopDetected, pattern := detectCognitiveLoop(a.loopState, reasoning, len(calls) == 0); loopDetected {
-					a.sink.Emit(event.Event{Kind: event.Notice, Level: event.LevelWarn,
-						Text: "cognitive loop detected: " + pattern})
-					a.session.Add(provider.Message{Role: provider.RoleUser,
-						Content: a.withTurnPreferences(cognitiveLoopBreakerMessage(pattern))})
-					a.maybeCompact(ctx, usage)
-					continue
-				}
-			}
-				// Gate 1: Promise detection — if the model's final answer
-				// ends with "I'll..." or similar, it's promising future
-				// work instead of executing it now.
-				if promiseCtx, isPromise := detectUnfulfilledPromise(text); isPromise {
-					event.RecordReadinessAudit(a.sink, evidence.ReadinessAudit{
-						Result:  evidence.ReadinessBlocked,
-						Applies: true,
-					})
-					a.sink.Emit(event.Event{Kind: event.Notice, Level: event.LevelWarn, Text: "final-answer readiness blocked: promise detected"})
-					a.session.Add(provider.Message{Role: provider.RoleUser, Content: a.withTurnPreferences(promiseRetryMessage(promiseCtx))})
-					a.maybeCompact(ctx, usage)
-					continue
-				}
-
-				// Gate 2: Claim verification — flag file:line claims
-				// about files that were not actually read this turn.
-				fileRefs := extractFileLineRefs(text)
-				for _, ref := range fileRefs {
-					if !a.evidence.HasSuccessfulBashMentioningPaths([]string{ref.file}) &&
-						!a.evidence.HasSuccessfulWrite([]string{ref.file}) {
-						touched := a.evidence.TouchedPaths(50, false)
-						isRead := false
-						for _, tp := range touched {
-							if tp == ref.file {
-								isRead = true
-								break
-							}
-						}
-						if !isRead && len(fileRefs) > 0 && len(fileRefs) <= 5 {
-							a.sink.Emit(event.Event{Kind: event.Notice, Level: event.LevelWarn,
-								Text: fmt.Sprintf("claim about %s not backed by a file read this turn", ref.String())})
-						}
-					}
-				}
-
 			readiness := a.finalReadinessCheck()
 			if readiness.reason != "" {
 				finalReadinessBlocks++
@@ -2014,9 +1936,6 @@ func (a *Agent) applyStormBreaker(calls []provider.ToolCall, outcomes []toolOutc
 	sig, ok := batchStormSignature(calls, outcomes)
 	if !ok {
 		a.stormSig, a.stormCount = "", 0
-	if a.loopState != nil {
-		resetCognitiveLoopState(a.loopState)
-	}
 		return
 	}
 	if sig != a.stormSig {
@@ -2174,7 +2093,7 @@ func (a *Agent) executeOne(ctx context.Context, call provider.ToolCall) toolOutc
 			}
 		}
 	}
-	cctx := withCallContext(ctx, call.ID, a.sink, a.asker, a.planMode.Load(), a.messenger)
+	cctx := withCallContext(ctx, call.ID, a.sink, a.asker, a.planMode.Load())
 	if a.evidence != nil {
 		cctx = evidence.WithLedger(cctx, a.evidence)
 		cctx = evidence.WithSessionMessages(cctx, a.session.Snapshot())

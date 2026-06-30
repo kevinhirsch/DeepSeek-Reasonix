@@ -4,7 +4,6 @@
 package idle
 
 import (
-	"context"
 	"sync"
 	"time"
 )

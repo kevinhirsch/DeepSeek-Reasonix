@@ -48,7 +48,7 @@ func promptEvalCommand(args []string) int {
 		return 2
 	}
 
-	role = strings.ToLower(strings.TrimSpace(role))
+	*role = strings.ToLower(strings.TrimSpace(*role))
 	validRoles := map[string]bool{
 		"explorer":  true,
 		"reviewer":  true,

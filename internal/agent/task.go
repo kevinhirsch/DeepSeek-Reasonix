@@ -36,8 +36,6 @@ var subagentMetaTools = []string{
 	"task",
 	"read_only_task",
 	"parallel_tasks",
-	"workflow",
-	"send_to_subagent",
 	"run_skill",
 	"read_only_skill",
 	"read_skill",
@@ -180,7 +178,6 @@ type TaskTool struct {
 	baseModel           string
 	baseEffort          string
 	identityProfile     func(modelRef, effort string) (string, string)
-	isDeepSeek          bool
 }
 
 // NewTaskTool wires a task tool to the parent agent's environment so its
@@ -230,11 +227,6 @@ func (t *TaskTool) WithTranscripts(store *SubagentStore, workspaceRoot, baseMode
 
 func (t *TaskTool) WithTranscriptIdentityResolver(resolve func(modelRef, effort string) (string, string)) *TaskTool {
 	t.identityProfile = resolve
-	return t
-}
-
-func (t *TaskTool) WithIsDeepSeek(v bool) *TaskTool {
-	t.isDeepSeek = v
 	return t
 }
 
@@ -467,10 +459,6 @@ func (t *TaskTool) Execute(ctx context.Context, args json.RawMessage) (string, e
 			}
 			return FormatSubagentRunResult(answer, run, false), nil
 		})
-		if job == nil {
-			run.Release()
-			return "", fmt.Errorf("could not start background task %q", label)
-		}
 		if run != nil && run.Ref != "" {
 			return fmt.Sprintf("Started background task %q (%s).\n%s\nIt runs across turns; collect its final answer with wait (or wait will return it once done), and you'll be notified when it finishes.", job.ID, label, FormatSubagentReference(run)), nil
 		}
@@ -748,15 +736,8 @@ func RunSubAgentWithSession(ctx context.Context, prov provider.Provider, reg *to
 	if sess == nil {
 		return "", fmt.Errorf("sub-agent session is nil")
 	}
-	// When InjectPrompt is set, prepend it as the first user message so the
-	// subagent receives role-specific instructions. DeepSeek providers use this
-	// path because they respond better to user-role than system-role prompts.
-	effectivePrompt := prompt
-	if opts.InjectPrompt != "" {
-		effectivePrompt = opts.InjectPrompt + "\n\n---\n\n" + prompt
-	}
 	sub := New(prov, reg, sess, opts, sink)
-	if err := sub.Run(ctx, effectivePrompt); err != nil {
+	if err := sub.Run(ctx, prompt); err != nil {
 		return "", fmt.Errorf("sub-agent: %w", err)
 	}
 	// Walk the session backwards for the last assistant message with content —

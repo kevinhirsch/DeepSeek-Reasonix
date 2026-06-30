@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -35,9 +36,9 @@ type StreamEvent struct {
 
 // Send posts a single event to the server's work item event endpoint.
 func (s *Streamer) Send(ctx context.Context, workID string, ev StreamEvent) error {
-	body, _ := json.Marshal(ev)
+	jsonBody, _ := json.Marshal(ev)
 	req, err := http.NewRequestWithContext(ctx, "POST",
-		s.serverURL+"/v1/work/"+workID+"/events", nil)
+		s.serverURL+"/v1/work/"+workID+"/events", strings.NewReader(string(jsonBody)))
 	if err != nil {
 		return err
 	}

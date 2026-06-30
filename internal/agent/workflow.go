@@ -6,6 +6,10 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+
+	"reasonix/internal/event"
+
+	"reasonix/internal/tool"
 )
 
 // Workflow strategy constants.
@@ -359,7 +363,7 @@ func (w *WorkflowTool) dispatchStage(ctx context.Context, stage WorkflowStage, p
 	}
 
 	// Voting: extract verdicts from each output and apply threshold
-	return w.applyVoting(valid, stage.Voting), nil
+	return applyVoting(valid, stage.Voting), nil
 }
 
 // runStageSubagent dispatches a single subagent for a workflow stage.
@@ -390,12 +394,8 @@ func (w *WorkflowTool) runStageSubagent(ctx context.Context, stage WorkflowStage
 	sess := NewSession(sysPrompt)
 
 	steps := w.taskTool.maxSteps
-	if steps > 0 && steps /= 2; steps < 5 {
-		steps = 5
-	}
-	if isReadOnly && steps > 0 && steps /= 2; steps < 5 {
-		steps = 5
-	}
+	if steps > 0 { steps /= 2; if steps < 5 { steps = 5 } }
+	if isReadOnly && steps > 0 { steps /= 2; if steps < 5 { steps = 5 } }
 
 	return RunSubAgentWithSession(ctx, prov, subReg, sess, prompt, Options{
 		MaxSteps:            steps,
@@ -411,8 +411,7 @@ func (w *WorkflowTool) runStageSubagent(ctx context.Context, stage WorkflowStage
 		CompactForceRatio:   w.taskTool.compactForceRatio,
 		ArchiveDir:          w.taskTool.archiveDir,
 		KeepPolicy:          w.taskTool.keepPolicy,
-		IsDeepSeek:          w.taskTool.isDeepSeek,
-	}, Discard)
+	}, event.Discard)
 }
 
 // ---------------------------------------------------------------------------

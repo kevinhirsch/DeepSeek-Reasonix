@@ -85,7 +85,7 @@ func (s *Store) Search(query string, max int) []*Entry {
 		e     *Entry
 		score float64
 	}
-	var scored []scored
+	var scoredEntries []scored
 
 	for _, e := range s.entries {
 		content := strings.ToLower(e.Question + " " + e.Answer)
@@ -99,15 +99,15 @@ func (s *Store) Search(query string, max int) []*Entry {
 			e.AccessedAt = time.Now()
 			e.AccessCount++
 			score := float64(matches) * e.Confidence
-			scored = append(scored, scored{e, score})
+			scoredEntries = append(scoredEntries, scored{e, score})
 		}
 	}
 
-	sort.Slice(scored, func(i, j int) bool { return scored[i].score > scored[j].score })
+	sort.Slice(scoredEntries, func(i, j int) bool { return scoredEntries[i].score > scoredEntries[j].score })
 
 	var results []*Entry
-	for i := 0; i < max && i < len(scored); i++ {
-		results = append(results, scored[i].e)
+	for i := 0; i < max && i < len(scoredEntries); i++ {
+		results = append(results, scoredEntries[i].e)
 	}
 	return results
 }

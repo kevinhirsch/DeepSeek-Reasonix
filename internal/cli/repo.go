@@ -6,11 +6,8 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
-	"strings"
 	"time"
 
-	"reasonix/internal/config"
 	"reasonix/internal/git"
 	"reasonix/internal/github"
 )

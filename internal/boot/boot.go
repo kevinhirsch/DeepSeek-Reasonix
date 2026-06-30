@@ -42,7 +42,6 @@ import (
 	"reasonix/internal/planmode"
 	"reasonix/internal/plugin"
 	"reasonix/internal/provider"
-	"reasonix/internal/provider/openai"
 	"reasonix/internal/sandbox"
 	"reasonix/internal/skill"
 	"reasonix/internal/tool"
@@ -192,19 +191,9 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 	// (RequireKey is false so the UI stays reachable) and then fail silently on the
 	// first request, showing as an empty/dead model. Surface the cause up front.
 	if !opts.RequireKey && entry.RequiresAPIKey() && entry.APIKey() == "" {
-		if entry.LooksLikeLiteralAPIKeyValue() {
-			// Before 1.11, api_key_env tolerated a literal key value placed
-			// directly in the field; that fallback was removed for security.
-			// A config carried over from 1.10 (or written assuming the field
-			// took the key itself) now resolves empty — point the user at the
-			// migration rather than the generic "not set" message.
-			sink.Emit(event.Event{Kind: event.Notice, Text: fmt.Sprintf("model %q: api_key_env looks like a raw key value, not an environment-variable or credential name. Since 1.11, api_key_env must name an env var or a credentials entry (the literal key is no longer accepted in config). Move the value into your credentials file under a name like %s and set api_key_env to that name.", modelName, suggestAPIKeyEnvName(entry.APIKeyEnv))})
-		} else {
-			sink.Emit(event.Event{Kind: event.Notice, Text: fmt.Sprintf("model %q is selected but its API key %s is not set — requests will fail until you set it", modelName, entry.APIKeyEnv)})
-		}
+		sink.Emit(event.Event{Kind: event.Notice, Text: fmt.Sprintf("model %q is selected but its API key %s is not set — requests will fail until you set it", modelName, entry.APIKeyEnv)})
 	}
 	jm := jobs.NewManager(sink, jobs.WithStalledWarningAfter(time.Duration(cfg.BackgroundJobStalledWarningSeconds())*time.Second))
-	messenger := agent.NewSubagentMessenger()
 	sessionDir := opts.SessionDir
 	if sessionDir == "" {
 		sessionDir = config.SessionDir()
@@ -264,20 +253,6 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 		if envSection != "" {
 			sysPrompt += "\n\n" + envSection
 		}
-	}
-
-	// Quality & behavior rules (Issue #16): anti-overengineering,
-	// evidence-grounded claims, silence default, outcome-first communication.
-	sysPrompt += "\n\n" + qualitySystemPrompt
-	if openai.IsDeepSeek(entry.BaseURL) {
-		sysPrompt += "\n\n" + deepSeekQualityTuning
-	}
-
-	// Effort calibration table (Issue #08): guides model toward correct
-	// reasoning effort per subagent role. Provider-aware variant appended.
-	sysPrompt += "\n\n" + effortCalibrationTable
-	if openai.IsDeepSeek(entry.BaseURL) {
-		sysPrompt += "\n\n(DeepSeek: only high and max are available. Use high for most roles, max for verify, security_review, and complex multi-file tasks.)"
 	}
 
 	// Persistent memory (REASONIX.md / AGENTS.md hierarchy + auto-memory index)
@@ -533,14 +508,6 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 		subagentStore.WithDestroyedChecker(jm.IsDestroying)
 	}
 
-	// DeepSeek subagents loop at temperature 0.0 - override to 0.6 (the value
-	// DeepSeek recommends for subagents). Parent turn temperature is unaffected.
-	subagentTemp, tempOverridden := deepSeekSubagentTemperature(entry, cfg.Agent.Temperature)
-	if tempOverridden {
-		sink.Emit(event.Event{Kind: event.Notice, Level: event.LevelInfo,
-			Text: fmt.Sprintf("DeepSeek subagent temperature overridden from %.1f to %.1f (DeepSeek recommends 0.5-0.7 for subagents)", cfg.Agent.Temperature, subagentTemp)})
-	}
-
 	// Permission policy gates every tool call. The headless gate (no Approver)
 	// resolves "ask" to allow — preserving `reasonix run` autonomy — while deny
 	// rules hard-block in every mode. Interactive frontends (chat, desktop) swap
@@ -608,11 +575,11 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 	newTaskTool := func() *agent.TaskTool {
 		return agent.NewTaskTool(execProv, entry.Price, reg, maxSteps,
 			entry.ContextWindow, cfg.Agent.RecentKeep, cfg.Agent.SoftCompactRatio, cfg.Agent.ToolResultSnipRatio, cfg.Agent.CompactRatio, cfg.Agent.CompactForceRatio,
-			subagentTemp, config.ArchiveDir(), "", headlessGate,
+			cfg.Agent.Temperature, config.ArchiveDir(), "", headlessGate,
 			keepPolicy,
 			taskModel, taskEffort, resolveSubagentProvider).
 			WithTranscripts(subagentStore, root, modelName, entry.Effort).
-			WithTranscriptIdentityResolver(subagentIdentity).WithIsDeepSeek(openai.IsDeepSeek(entry.BaseURL))
+			WithTranscriptIdentityResolver(subagentIdentity)
 	}
 	addTaskTool := func() string {
 		if taskToolAdded {
@@ -624,7 +591,6 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 		}
 		reg.Add(taskTool)
 		reg.Add(agent.NewParallelTasksTool(taskTool, reg))
-			reg.Add(agent.NewWorkflowTool(taskTool, reg))
 		return "enabled task."
 	}
 	addReadOnlyTaskTool := func() string {
@@ -664,9 +630,6 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 	// has none, so ask resolves to "decide for yourself".
 	reg.Add(agent.NewAskTool())
 
-	// send_to_subagent tool lets the parent steer running background sub-agents.
-	reg.Add(agent.NewSendToSubagentTool())
-
 	// Skill tools: read_only_skill is a narrow plan-mode-safe entry point; the
 	// full skills source adds run_skill / install_skill plus the dedicated
 	// subagent wrappers (explore / research / review / security_review). Read-only
@@ -699,14 +662,9 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 			}
 		}
 		sysPrompt := agent.DefaultReadOnlyTaskSystemPrompt + "\n\nSkill instructions:\n" + sk.Body
-			// Inject role-specific prompt for DeepSeek via first user message.
-			injectPrompt := ""
-			if openai.IsDeepSeek(entry.BaseURL) {
-				injectPrompt = agent.RolePrompt(sk.Name, true)
-			}
 		return agent.RunSubAgentWithSession(sctx, prov, subReg, agent.NewSession(sysPrompt), task, agent.Options{
 			MaxSteps:            steps,
-			Temperature:         subagentTemp,
+			Temperature:         cfg.Agent.Temperature,
 			Pricing:             price,
 			UsageSource:         event.UsageSourceSubagent,
 			Gate:                headlessGate,
@@ -719,8 +677,6 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 			ArchiveDir:          config.ArchiveDir(),
 			KeepPolicy:          keepPolicy,
 			ReasoningLanguage:   agent.ReasoningLanguageFromContext(sctx),
-				InjectPrompt:        injectPrompt,
-				IsDeepSeek:            openai.IsDeepSeek(entry.BaseURL),
 		}, agent.NestedSink(sctx, event.Discard))
 	}
 	// Writer-capable subagent skills reuse the sub-agent machinery via this
@@ -790,13 +746,9 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 				steps = 5
 			}
 		}
-			injectPrompt := ""
-			if openai.IsDeepSeek(entry.BaseURL) {
-				injectPrompt = agent.RolePrompt(sk.Name, true)
-			}
 		answer, err := agent.RunSubAgentWithSession(sctx, prov, subReg, run.Session, task, agent.Options{
 			MaxSteps:          steps,
-			Temperature:       subagentTemp,
+			Temperature:       cfg.Agent.Temperature,
 			Pricing:           price,
 			UsageSource:       event.UsageSourceSubagent,
 			Gate:              headlessGate,
@@ -805,8 +757,6 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 			ArchiveDir:        config.ArchiveDir(),
 			KeepPolicy:        keepPolicy,
 			ReasoningLanguage: agent.ReasoningLanguageFromContext(sctx),
-				InjectPrompt:        injectPrompt,
-				IsDeepSeek:            openai.IsDeepSeek(entry.BaseURL),
 		}, agent.NestedSink(sctx, event.Discard))
 		if err != nil {
 			return "", errors.Join(err, subagentStore.SaveFailed(run))
@@ -1018,8 +968,6 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 	executor := agent.New(execProv, reg, execSess, agent.Options{
 		MaxSteps:                           maxSteps,
 		Temperature:                        cfg.Agent.Temperature,
-				Messenger:                             messenger,
-				IsDeepSeek:            openai.IsDeepSeek(entry.BaseURL),
 		Pricing:                            entry.Price,
 		Gate:                               headlessGate,
 		Hooks:                              hookRunner,
@@ -1066,11 +1014,7 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 		if !ok {
 			return nil, fmt.Errorf("planner_model %q is not a configured provider", pm)
 		}
-		// Different provider instance or different model → two-model mode.
-		// The old pe.Model != entry.Model only compared model IDs, missing the
-		// case where the same model name is served by different providers (e.g.
-		// DeepSeek official vs opencode.ai gateway).
-		if pe.Name != entry.Name || pe.Model != entry.Model {
+		if pe.Model != entry.Model {
 			plannerProv, err := NewProviderWithProxy(pe, proxySpec)
 			if err != nil {
 				return nil, fmt.Errorf("planner %q: %w", pm, err)
@@ -1415,7 +1359,6 @@ func NewProviderWithProxy(e *config.ProviderEntry, proxy netclient.ProxySpec) (p
 			"effort":             config.EffectiveEffort(e),
 			"reasoning_protocol": config.ReasoningProtocolForEntry(e),
 			"chat_url":           e.ChatURL,
-			"supported_efforts":  e.SupportedEfforts,
 			"proxy_spec":         proxy,
 			"vision":             config.EffectiveVision(e),
 			"vision_detail":      e.VisionDetail,
@@ -1744,194 +1687,3 @@ func providerNames(cfg *config.Config) string {
 	}
 	return strings.Join(names, "/")
 }
-
-// suggestAPIKeyEnvName derives a plausible credential/env-var name from a
-// literal key value or provider name, so the migration notice can recommend a
-// concrete target instead of just "rename it". Prefixed with the provider name
-// when known, upper-snake-cased.
-func suggestAPIKeyEnvName(providerName string) string {
-	base := strings.TrimSpace(providerName)
-	if base == "" {
-		base = "REASONIX_API_KEY"
-	}
-	// If the name already looks like an env var (UPPER_SNAKE), keep it.
-	if strings.ToUpper(base) == base && strings.ContainsAny(base, "_") {
-		return base
-	}
-	var b strings.Builder
-	for _, r := range base {
-		switch {
-		case r >= 'a' && r <= 'z':
-			b.WriteRune(r - 32)
-		case r >= 'A' && r <= 'Z':
-			b.WriteRune(r)
-		case r >= '0' && r <= '9':
-			b.WriteRune(r)
-		default:
-			if b.Len() > 0 && strings.LastIndexByte(b.String(), '_') != b.Len()-1 {
-				b.WriteByte('_')
-			}
-		}
-	}
-	out := b.String()
-	if out == "" {
-		return "REASONIX_API_KEY"
-	}
-	if !strings.HasPrefix(out, "REASONIX_") {
-		out = "PROVIDER_" + out
-	}
-	if !strings.HasSuffix(out, "_API_KEY") {
-		out = out + "_API_KEY"
-	}
-	return out
-}
-
-// deepSeekSubagentTemperature overrides temperature 0.0 → 0.6 for DeepSeek
-// subagents. DeepSeek recommends 0.5-0.7 for subagent tasks; at 0.0 they
-// can loop infinitely. The parent turn temperature is NOT affected — only
-// subagent construction paths use the returned value.
-//
-// Returns the effective temperature and true when an override was applied.
-func deepSeekSubagentTemperature(e *config.ProviderEntry, configuredTemp float64) (float64, bool) {
-	if configuredTemp != 0.0 {
-		return configuredTemp, false
-	}
-	if !openai.IsDeepSeek(e.BaseURL) {
-		return configuredTemp, false
-	}
-	return 0.6, true
-}
-
-// loadRolePrompt loads a role-specific subagent prompt from the file system,
-// falling back to the provided default when the file doesn't exist or is empty.
-// Prompt files live in .reasonix/prompts/v1/<role>.md and are plain markdown.
-func loadRolePrompt(role, promptsDir, defaultPrompt string) string {
-	if promptsDir == "" {
-		return defaultPrompt
-	}
-	path := filepath.Join(promptsDir, role+".md")
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return defaultPrompt
-	}
-	content := strings.TrimSpace(string(data))
-	if content == "" {
-		return defaultPrompt
-	}
-	return content
-}
-
-// loadDeepSeekNotes loads the shared DeepSeek adaptation notes from
-// .reasonix/prompts/v1/deepseek_notes.md. Returns empty string when missing.
-func loadDeepSeekNotes(promptsDir string) string {
-	if promptsDir == "" {
-		return ""
-	}
-	path := filepath.Join(promptsDir, "deepseek_notes.md")
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(data))
-}
-
-// defaultPromptDir returns the v1 prompt directory path under .reasonix/prompts/v1
-// within the given workspace root. Returns "" if the directory does not exist.
-func defaultPromptDir(root string) string {
-	dir := filepath.Join(root, ".reasonix", "prompts", "v1")
-	if _, err := os.Stat(dir); os.IsNotExist(err) {
-		return ""
-	}
-	return dir
-}
-
-// qualitySystemPrompt is the core quality & behavior rules block added to every
-// system prompt. It encodes Claude Code's five quality pillars into model-agnostic
-// instructions: anti-overengineering, evidence-grounded claims, silence default,
-// outcome-first communication, and anti-patterns. See .reasonix/QUALITY_ARCHITECTURE.md.
-const qualitySystemPrompt = `## Quality & Behavior Rules
-
-### Before acting
-- When you have enough information, act. Do not re-derive facts already established.
-- Do not re-litigate decisions the user has already made.
-- If weighing a choice, give a recommendation, not an exhaustive survey.
-- Read code to verify assumptions — never guess about function signatures, types, or behavior.
-
-### While coding
-- Match the surrounding code's style: comment density, naming convention, error handling pattern.
-- Do only what was asked. A bug fix doesn't need surrounding cleanup.
-- Don't add features, refactors, or abstractions beyond the task scope.
-- Don't design for hypothetical future requirements — simplest thing that works.
-- Don't add error handling for scenarios that cannot happen. Trust internal code.
-- Only validate at system boundaries (user input, external APIs).
-- Don't use feature flags or backwards-compatibility shims when you can change code directly.
-
-### Between tool calls
-- Default to silence. Only write when you find something, change direction, or hit a blocker.
-- One sentence each. Do not narrate: "Now I'll...", "Let me check...", "Looking at..."
-- The user sees your tool calls — they don't need a running commentary.
-
-### Before finishing
-- AUDIT: Check your last paragraph. If it's a plan, analysis, question, or promise about work you haven't done — DO that work now with tool calls.
-- EVIDENCE: Every claim must cite a tool result from this session. If unverified, say so.
-- COMPLETENESS: Ask yourself: "Did I do everything the user asked? What did I skip?"
-- REPORT: Lead with the outcome — one sentence on what happened or what you found.
-- VERBOSITY: Drop details that don't change what the reader would do next. Be selective, not compressed.
-
-### When reporting results
-- Report faithfully: if tests fail, say so with the output.
-- If a step was skipped, say that. When something is done and verified, state it plainly.
-- Use complete sentences. Spell out terms. Don't use arrow chains or hyphen-stacked compounds.
-- When mentioning files, give each one its own clause — don't pack several into parentheses.
-- Open with outcome, then supporting detail. If choosing between short and clear, choose clear.
-
-### Anti-patterns — never do these
-- Don't write "Now I'll run the tests" — run them.
-- Don't write "Let me check the file" — read it.
-- Don't write "I should refactor this" — either do it or don't mention it.
-- Don't end with "Want me to also…?" after completing a task — stop cleanly.
-- Don't invent error messages, stack traces, or test output — only quote real tool output.
-- Don't skip tests, delete failing assertions, or edit config to make tests pass.
-- Don't install packages, update dependencies, or change environment without asking.`
-
-// deepSeekQualityTuning counter-steers DeepSeek's specific behavioral tendencies.
-// Appended to the system prompt after the quality block only for DeepSeek providers.
-const deepSeekQualityTuning = `### DeepSeek-specific
-
-Over-engineering: Do not add helper functions, wrapper types, or abstraction layers
-unless the task explicitly requests them. A single-file change should stay in one file.
-A bug fix should touch only the function with the bug, not its callers. You may see
-opportunities for improvement — do not act on them unless asked.
-
-Over-narration: You are running in an autonomous coding agent. The user is not watching
-in real time. Between-tool-call narration wastes tokens and clutters the session. Write
-NOTHING between tool calls unless: (a) you found something the user needs to know now,
-(b) you changed direction, or (c) you hit a blocker requiring user input. In all three
-cases, limit output to one sentence.
-
-Repetition: Once you have decided on an approach, execute it. Do not revisit the same
-decision unless new evidence contradicts it. If a tool call succeeds, trust its output —
-do not re-verify with a second identical call.`
-
-// effortCalibrationTable guides the model toward the correct reasoning effort
-// per subagent role. Appended to the executor system prompt (Issue #08).
-
-// effortCalibrationTable guides the model toward the correct reasoning effort
-// per subagent role. Appended to the executor system prompt (Issue #08).
-const effortCalibrationTable = `## Subagent Effort Calibration
-
-When spawning sub-agents via task, read_only_task, or parallel_tasks, choose the
-effort level based on the sub-agent's role:
-
-| Role | Effort | Why |
-|---|---|---|
-| explore, read_only_task, research | high | Breadth-focused; high is sufficient for search |
-| plan | high | Architecture planning doesn't need deeper reasoning |
-| review, code_review | high | Coverage over depth per individual finding |
-| verify, security_review | max | Must thoroughly attempt refutation and break things |
-| task (complex multi-file change) | max | Cross-cutting changes need comprehensive reasoning |
-| task (simple single-file change) | high | Overthinking adds latency without value |
-
-Provider notes: DeepSeek only supports high and max. Other providers
-(Anthropic, OpenAI) support the full range (low, medium, high, xhigh, max).
-When using DeepSeek, low/medium maps to high and xhigh maps to max automatically.`

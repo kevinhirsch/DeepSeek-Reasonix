@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"reasonix/internal/event"
 	"fmt"
 	"strings"
 	"sync"
@@ -45,7 +46,7 @@ func (s *SpeculativeRunner) Run(ctx context.Context, prompt string) (string, err
 				MaxSteps:  s.taskTool.maxSteps,
 				Temperature: s.taskTool.temperature,
 				Gate:      s.taskTool.gate,
-			}, Discard)
+			}, event.Discard)
 		}(i)
 	}
 	wg.Wait()

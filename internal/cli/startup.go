@@ -7,10 +7,10 @@ import (
 
 // StartupPhase represents a named startup stage for the cold-start spinner.
 type StartupPhase struct {
-	Name     string
-	started  time.Time
-	done     bool
-	err      error
+	Name    string
+	started time.Time
+	done    bool
+	err     error
 }
 
 // StartupProgress tracks multi-phase startup with spinner text.
@@ -26,21 +26,17 @@ func NewStartupProgress() *StartupProgress {
 			{Name: "Checking providers"},
 			{Name: "Loading skills"},
 			{Name: "Ready"},
-		}
+		},
 	}
 }
 
-// Complete marks a phase as done. Returns the display text for the next phase.
+// Complete marks a phase as done.
 func (sp *StartupProgress) Complete(index int) string {
 	if index < 0 || index >= len(sp.phases) {
 		return ""
 	}
 	sp.phases[index].done = true
 	sp.phases[index].started = time.Now()
-	if index+1 < len(sp.phases) {
-		sp.phases[index+1].started = time.Now()
-		return sp.render()
-	}
 	return sp.render()
 }
 
@@ -75,11 +71,10 @@ func CrashRecoveryMessage(sessionCount int) string {
 	if sessionCount == 0 {
 		return ""
 	}
-	return fmt.Sprintf("Recovering %d session(s) from previous run. This may take a moment.", sessionCount)
+	return fmt.Sprintf("Recovering %d session(s)...", sessionCount)
 }
 
 // UpdateAvailableNotice returns the update notification.
 func UpdateAvailableNotice(currentVersion, newVersion string) string {
-	return fmt.Sprintf("reasonix %s is available (current: %s). Run 'reasonix upgrade' to update.",
-		newVersion, currentVersion)
+	return fmt.Sprintf("reasonix %s available (current: %s). Run upgrade.", newVersion, currentVersion)
 }

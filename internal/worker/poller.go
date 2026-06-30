@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -97,9 +98,10 @@ func (p *Poller) Claim(ctx context.Context, id string) error {
 
 // Complete reports a work item as completed with its result.
 func (p *Poller) Complete(ctx context.Context, id, result string) error {
-	body, _ := json.Marshal(map[string]string{"result": result})
+	jsonBody, _ := json.Marshal(map[string]string{"result": result})
 	req, err := http.NewRequestWithContext(ctx, "POST",
-		p.serverURL+"/v1/work/"+id+"/complete", nil)
+		p.serverURL+"/v1/work/"+id+"/complete",
+		strings.NewReader(string(jsonBody)))
 	if err != nil {
 		return err
 	}

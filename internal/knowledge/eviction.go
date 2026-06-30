@@ -268,24 +268,24 @@ func (s *Store) EvictRanked(cfg EvictionConfig) (evicted int, deduped int) {
 		e     *Entry
 		score EvictionScore
 	}
-	var ranked []ranked
+	var rankedEntries []ranked
 	for _, e := range entries {
 		score := scorer.Score(e, entries)
-		ranked = append(ranked, ranked{e: e, score: score})
+		rankedEntries = append(rankedEntries, ranked{e: e, score: score})
 	}
 
 	// Sort ascending by total score (lowest first = eviction candidates).
-	sort.Slice(ranked, func(i, j int) bool {
-		return ranked[i].score.Total < ranked[j].score.Total
+	sort.Slice(rankedEntries, func(i, j int) bool {
+		return rankedEntries[i].score.Total < rankedEntries[j].score.Total
 	})
 
 	// Determine how many to evict.
-	need := len(ranked) - cfg.SoftCap
+	need := len(rankedEntries) - cfg.SoftCap
 	if need <= 0 {
 		need = 0
 	}
 	// Always evict entries below MinScore regardless of size.
-	for _, r := range ranked {
+	for _, r := range rankedEntries {
 		if r.score.Total < cfg.MinScore && cfg.MinScore > 0 {
 			need++
 		}
@@ -293,14 +293,14 @@ func (s *Store) EvictRanked(cfg EvictionConfig) (evicted int, deduped int) {
 	if need <= 0 {
 		return 0, deduped
 	}
-	if need > len(ranked) {
-		need = len(ranked)
+	if need > len(rankedEntries) {
+		need = len(rankedEntries)
 	}
 
 	// Remove entries.
 	s.mu.Lock()
-	for i := 0; i < need && i < len(ranked); i++ {
-		delete(s.entries, ranked[i].e.ID)
+	for i := 0; i < need && i < len(rankedEntries); i++ {
+		delete(s.entries, rankedEntries[i].e.ID)
 		evicted++
 	}
 	s.mu.Unlock()

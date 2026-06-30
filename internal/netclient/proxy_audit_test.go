@@ -28,9 +28,9 @@ func TestProxySpec_Validation(t *testing.T) {
 		valid bool
 	}{
 		{"empty", ProxySpec{}, true},
-		{"http proxy", ProxySpec{HTTPProxy: "http://proxy:8080"}, true},
-		{"socks5", ProxySpec{SOCKS5Proxy: "socks5://127.0.0.1:1080"}, true},
-		{"invalid scheme", ProxySpec{HTTPProxy: "ftp://bad"}, false},
+		{"http proxy", ProxySpec{URL: "http://proxy:8080"}, true},
+		{"socks5", ProxySpec{URL: "socks5://127.0.0.1:1080"}, true},
+		{"invalid scheme", ProxySpec{URL: "ftp://bad"}, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

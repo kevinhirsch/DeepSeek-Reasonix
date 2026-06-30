@@ -1,7 +1,6 @@
 package provider
 
 import (
-	"context"
 	"sync"
 	"time"
 )

@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"reasonix/internal/event"
 	"fmt"
 	"strings"
 	"sync"
@@ -74,7 +75,7 @@ func (c *CrossValidator) runWithModel(ctx context.Context, modelRef, prompt stri
 	sess := NewSession(DefaultVerifierPrompt)
 	return RunSubAgentWithSession(ctx, c.taskTool.prov, subReg, sess, prompt, Options{
 		MaxSteps: 10,
-	}, Discard)
+	}, event.Discard)
 }
 
 func extractVerdict(output string) string {

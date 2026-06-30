@@ -232,7 +232,7 @@ func TestPassRateString(t *testing.T) {
 func TestPassRateString_Zero(t *testing.T) {
 	s := PassRateString(0, 0)
 	if s != "0/0 (0%)" {
-		t.Fatalf("got %q, want '0/0 (0%)'", s)
+		t.Fatalf("got %q, want '0/0 (0%%)'", s)
 	}
 }
 

@@ -309,12 +309,12 @@ func sortEntriesByScore(entries []*Entry, now time.Time) {
 		e     *Entry
 		score float64
 	}
-	scored := make([]scored, len(entries))
+	scoredEntries := make([]scored, len(entries))
 	for i, e := range entries {
-		scored[i] = scored{e: e, score: entryValueScore(e, now)}
+		scoredEntries[i] = scored{e: e, score: entryValueScore(e, now)}
 	}
-	sort.Slice(scored, func(i, j int) bool { return scored[i].score < scored[j].score })
-	for i, s := range scored {
+	sort.Slice(scoredEntries, func(i, j int) bool { return scoredEntries[i].score < scoredEntries[j].score })
+	for i, s := range scoredEntries {
 		entries[i] = s.e
 	}
 }

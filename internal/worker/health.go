@@ -3,7 +3,7 @@ package worker
 import (
 	"context"
 	"encoding/json"
-	"fmt"
+	"strings"
 	"net/http"
 	"runtime"
 	"time"
@@ -66,9 +66,9 @@ func (h *HealthReporter) Run(ctx context.Context, cfg *Config, startTime time.Ti
 }
 
 func (h *HealthReporter) send(ctx context.Context, report HealthReport) {
-	body, _ := json.Marshal(report)
+	jsonBody, _ := json.Marshal(report)
 	req, err := http.NewRequestWithContext(ctx, "POST",
-		h.serverURL+"/v1/work/health", nil)
+		h.serverURL+"/v1/work/health", strings.NewReader(string(jsonBody)))
 	if err != nil {
 		return
 	}

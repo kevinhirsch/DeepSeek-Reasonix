@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"reasonix/internal/provider"
+	"reasonix/internal/event"
 )
 
 // ContextJanitor semantically compacts long-running sessions every N turns.
@@ -43,6 +44,11 @@ func (j *ContextJanitor) MaybeCompact(ctx context.Context, messages []provider.M
 	return j.compact(ctx, messages)
 }
 
+
+func truncateMessageContent(s string, n int) string {
+	if len(s) <= n { return s }
+	return s[:n-3] + "..."
+}
 func (j *ContextJanitor) compact(ctx context.Context, messages []provider.Message) (string, error) {
 	if len(messages) < 10 {
 		return "", nil
@@ -68,8 +74,7 @@ func (j *ContextJanitor) compact(ctx context.Context, messages []provider.Messag
 
 	result, err := RunSubAgentWithSession(ctx, j.taskTool.prov, subReg, sess, prompt, Options{
 		MaxSteps:  5,
-		IsDeepSeek: true,
-	}, Discard)
+	}, event.Discard)
 	if err != nil {
 		return "", fmt.Errorf("context janitor compaction: %w", err)
 	}
