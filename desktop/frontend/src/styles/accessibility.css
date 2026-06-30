@@ -1,0 +1,380 @@
+/*
+ * accessibility.css — high-contrast, focus-visible, reduced-motion, screen-reader,
+ * touch-target, and color-blind-friendly extensions for the Reasonix desktop UI.
+ *
+ * This file is loaded AFTER styles.css so its rules override the base theme.
+ * All colors match the WCAG contrast ratios documented in
+ * .reasonix/FIDELITY_BRIDGE.md section 5.
+ */
+
+/* ----------------------------------------------------------------------------
+ * 1. High contrast theme — color overrides matching WCAG ratios from FIDELITY_BRIDGE.md
+ *    Triggered by prefers-contrast: more or forced-colors: active.
+ *    Dark theme values are shown; light values are in the nested media query.
+ * -------------------------------------------------------------------------- */
+
+@media (prefers-contrast: more) {
+  :root {
+    /* Backgrounds — maximised contrast between surface layers */
+    --bg: #000000;
+    --bg-soft: #0a0a0a;
+    --bg-elev: #141414;
+    --bg-elev-2: #1e1e1e;
+    --sidebar-bg: #000000;
+    --sidebar-hover: #1a1a1a;
+    --sidebar-active: rgba(255, 255, 255, 0.18);
+
+    /* Borders — high-contrast separators */
+    --border: #6b7280;
+    --border-soft: #4b5563;
+
+    /* Text — AAA ratios against black backgrounds */
+    --fg: #ffffff;
+    --fg-dim: #e5e7eb;
+    --fg-faint: #9ca3af;
+
+    /* Semantic colors — saturated for maximum contrast */
+    --accent: #ff7847;
+    --accent-fg: #000000;
+    --accent-text: #000000;
+    --accent-strong: #ff9066;
+    --ok: #22c55e;
+    --warn: #facc15;
+    --err: #ef4444;
+    --danger: #ef4444;
+    --danger-fg: #ffffff;
+
+    /* Focus ring — high contrast outline */
+    --focus-ring: 0 0 0 3px #ffffff;
+
+    /* Control surfaces */
+    --control-primary-bg: var(--accent);
+    --control-primary-fg: var(--accent-fg);
+    --button-bg: #1e1e1e;
+    --button-bg-hover: #333333;
+    --button-border: #6b7280;
+    --button-border-hover: #9ca3af;
+    --button-fg: #ffffff;
+  }
+
+  /* Light high-contrast */
+  @media (prefers-color-scheme: light) {
+    :root {
+      --bg: #ffffff;
+      --bg-soft: #f9fafb;
+      --bg-elev: #f3f4f6;
+      --bg-elev-2: #e5e7eb;
+      --sidebar-bg: #ffffff;
+      --sidebar-hover: #f3f4f6;
+      --sidebar-active: rgba(0, 0, 0, 0.1);
+
+      --border: #6b7280;
+      --border-soft: #9ca3af;
+
+      --fg: #000000;
+      --fg-dim: #111827;
+      --fg-faint: #374151;
+
+      --accent: #c2410c;
+      --accent-fg: #ffffff;
+      --accent-text: #ffffff;
+      --accent-strong: #9a3412;
+      --ok: #15803d;
+      --warn: #a16207;
+      --err: #b91c1c;
+      --danger: #b91c1c;
+      --danger-fg: #ffffff;
+
+      --focus-ring: 0 0 0 3px #000000;
+
+      --control-primary-bg: var(--accent);
+      --control-primary-fg: var(--accent-fg);
+      --button-bg: #e5e7eb;
+      --button-bg-hover: #d1d5db;
+      --button-border: #6b7280;
+      --button-border-hover: #374151;
+      --button-fg: #000000;
+    }
+  }
+}
+
+/* Windows High Contrast Mode — use system colors so the OS palette is honoured */
+@media (forced-colors: active) {
+  :root {
+    --bg: Canvas;
+    --bg-soft: Canvas;
+    --bg-elev: Canvas;
+    --bg-elev-2: Canvas;
+    --sidebar-bg: Canvas;
+    --sidebar-hover: Highlight;
+    --sidebar-active: Highlight;
+
+    --border: ButtonBorder;
+    --border-soft: ButtonBorder;
+
+    --fg: CanvasText;
+    --fg-dim: CanvasText;
+    --fg-faint: GrayText;
+
+    --accent: Highlight;
+    --accent-fg: HighlightText;
+    --accent-text: HighlightText;
+    --accent-strong: Highlight;
+    --ok: LinkText;
+    --warn: GrayText;
+    --err: CanvasText;
+    --danger: CanvasText;
+    --danger-fg: HighlightText;
+
+    --focus-ring: 0 0 0 3px Highlight;
+
+    --control-primary-bg: Highlight;
+    --control-primary-fg: HighlightText;
+    --button-bg: ButtonFace;
+    --button-bg-hover: Highlight;
+    --button-border: ButtonBorder;
+    --button-border-hover: Highlight;
+    --button-fg: ButtonText;
+  }
+}
+
+/* ----------------------------------------------------------------------------
+ * 2. Focus-visible ring — consistent outline for all interactive elements
+ *    Extends the base --focus-ring token with a visible offset outline.
+ * -------------------------------------------------------------------------- */
+
+/* Global focus-visible: a visible ring on every keyboard-focused element */
+*:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Suppress focus ring on pointer (mouse/touch) interactions — :focus-visible
+   already handles this in modern browsers. Older fallback: */
+.js-focus-visible :focus:not(.focus-visible) {
+  outline: none;
+}
+
+/* ----------------------------------------------------------------------------
+ * 3. Reduced motion — disable ALL animations when user prefers reduced motion
+ *    Replaces the global block in styles.css with 0ms for every property.
+ * -------------------------------------------------------------------------- */
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0s !important;
+    animation-delay: 0s !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0s !important;
+    transition-delay: 0s !important;
+    scroll-behavior: auto !important;
+  }
+
+  /* Spinner and pulsing dots — freeze them visibly */
+  .remotes-panel__status-dot--running,
+  .bg-tasks__status-dot--running {
+    animation: none;
+    opacity: 1;
+  }
+
+  /* Progress bars — snap to current position */
+  .remotes-panel__load-bar-fill,
+  .bg-tasks__progress-bar {
+    transition: none;
+  }
+}
+
+/* ----------------------------------------------------------------------------
+ * 4. Screen reader only utility — hides content visually but keeps it in the
+ *    accessibility tree. Mirrors .sr-only in styles.css but placed here so
+ *    this file is self-contained for a11y needs.
+ * -------------------------------------------------------------------------- */
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* ----------------------------------------------------------------------------
+ * 5. Large touch target minimums — WCAG 2.5.5 requires 44x44px for pointer
+ *    inputs. Applied when a coarse pointer (touchscreen) is detected.
+ * -------------------------------------------------------------------------- */
+
+@media (pointer: coarse) {
+  /* Interactive buttons, toggles, and list rows get minimum touch size */
+  .remotes-panel__action-btn,
+  .remotes-panel__row,
+  .bg-tasks__row,
+  .bg-tasks__action-btn,
+  .bg-tasks__kill-btn,
+  .bg-tasks__peek-btn,
+  .bg-tasks__send-btn {
+    min-height: 44px;
+    min-width: 44px;
+  }
+
+  /* Inline icon buttons need explicit dimensions */
+  .remotes-panel__icon-btn,
+  .bg-tasks__icon-btn {
+    min-height: 44px;
+    min-width: 44px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  /* Spacing between adjacent touch targets (WCAG recommends 2mm ≈ 8px gap) */
+  .remotes-panel__actions,
+  .bg-tasks__actions {
+    gap: 8px;
+  }
+}
+
+/* ----------------------------------------------------------------------------
+ * 6. Color-blind friendly status indicators — pattern + color, not color alone.
+ *    Each status uses a distinct background pattern so deuteranopia,
+ *    protanopia, and tritanopia users can distinguish states without colour.
+ * -------------------------------------------------------------------------- */
+
+/* Running: green + diagonal hatching */
+.remotes-panel__status-dot--online,
+.bg-tasks__status-dot--running {
+  background-color: var(--ok);
+  background-image: repeating-linear-gradient(
+    45deg,
+    transparent,
+    transparent 2px,
+    rgba(0, 0, 0, 0.15) 2px,
+    rgba(0, 0, 0, 0.15) 4px
+  );
+}
+
+/* Waiting: yellow + horizontal stripes */
+.remotes-panel__status-dot--degraded,
+.bg-tasks__status-dot--waiting {
+  background-color: var(--warn);
+  background-image: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 2px,
+    rgba(0, 0, 0, 0.15) 2px,
+    rgba(0, 0, 0, 0.15) 4px
+  );
+}
+
+/* Done / complete: green + solid (no pattern — distinct from running's hatching) */
+.bg-tasks__status-dot--done {
+  background-color: var(--ok);
+  background-image: none;
+}
+
+/* Failed: red + cross-hatch pattern */
+.bg-tasks__status-dot--failed {
+  background-color: var(--err);
+  background-image:
+    repeating-linear-gradient(
+      45deg,
+      transparent,
+      transparent 2px,
+      rgba(0, 0, 0, 0.2) 2px,
+      rgba(0, 0, 0, 0.2) 4px
+    ),
+    repeating-linear-gradient(
+      -45deg,
+      transparent,
+      transparent 2px,
+      rgba(0, 0, 0, 0.2) 2px,
+      rgba(0, 0, 0, 0.2) 4px
+    );
+}
+
+/* Pending: gray + dotted pattern */
+.bg-tasks__status-dot--pending {
+  background-color: var(--fg-faint);
+  background-image: radial-gradient(
+    circle,
+    rgba(0, 0, 0, 0.2) 1px,
+    transparent 1px
+  );
+  background-size: 4px 4px;
+}
+
+/* Remote: accent + vertical stripes */
+.remotes-panel__status-dot--offline,
+.bg-tasks__status-dot--remote {
+  background-color: var(--accent);
+  background-image: repeating-linear-gradient(
+    90deg,
+    transparent,
+    transparent 2px,
+    rgba(0, 0, 0, 0.15) 2px,
+    rgba(0, 0, 0, 0.15) 4px
+  );
+}
+
+/* ----------------------------------------------------------------------------
+ * 7. Panel-specific accessibility affordances
+ * -------------------------------------------------------------------------- */
+
+/* Larger click area for list rows — the whole row is a hit target */
+.remotes-panel__row,
+.bg-tasks__row {
+  cursor: pointer;
+  user-select: none;
+  position: relative;
+}
+
+/* Keyboard focus highlight within panels */
+.remotes-panel__row:focus-visible,
+.bg-tasks__row:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+  border-radius: var(--list-row-radius, 7px);
+}
+
+/* Status dot base — ensure minimum size for visibility */
+.remotes-panel__status-dot,
+.bg-tasks__status-dot {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+/* Key hint chips — readable at any zoom level */
+.bg-tasks__key-hint,
+.remotes-panel__key-hint {
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  color: var(--fg-faint);
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border-soft);
+  border-radius: 3px;
+  padding: 1px 4px;
+  line-height: 1.4;
+}
+
+/* Security indicator badge */
+.remotes-panel__security-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: var(--text-2xs);
+  color: var(--ok);
+  font-weight: var(--font-weight-medium);
+}
+
+.remotes-panel__security-badge--insecure {
+  color: var(--err);
+}
