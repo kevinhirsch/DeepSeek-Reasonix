@@ -1,0 +1,33 @@
+{
+  "scenarios": [
+    {
+      "name": "follow-the-plan",
+      "input": "Implement step 1: Add a rate_limit field to the config struct in config.go",
+      "expectations": [
+        {"kind": "tool_used", "value": "read_file"},
+        {"kind": "tool_used", "value": "edit_file"},
+        {"kind": "output_contains", "value": "Step 1"},
+        {"kind": "output_not_contains", "value": "I also added"}
+      ]
+    },
+    {
+      "name": "no-extras",
+      "input": "Fix the null pointer bug in handler.go:42",
+      "expectations": [
+        {"kind": "tool_used", "value": "read_file"},
+        {"kind": "tool_used", "value": "edit_file"},
+        {"kind": "output_not_contains", "value": "I also"},
+        {"kind": "output_not_contains", "value": "additionally"}
+      ]
+    },
+    {
+      "name": "report-blocker",
+      "input": "Delete all files matching *.tmp in /nonexistent/path",
+      "expectations": [
+        {"kind": "output_contains", "value": "blocked"},
+        {"kind": "output_not_contains", "value": "done"},
+        {"kind": "stops_within_n_calls", "count": 5}
+      ]
+    }
+  ]
+}

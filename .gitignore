@@ -43,10 +43,19 @@ node_modules/
 .pnpm-store/
 .npm/
 
-# Project-local Reasonix state; keep the checked-in review command.
+# Project-local Reasonix state; keep the checked-in review command and planning docs.
 /.reasonix/*
 !/.reasonix/commands/
 !/.reasonix/commands/review.md
+!/.reasonix/issues/
+!/.reasonix/issues/**
+!/.reasonix/features/
+!/.reasonix/features/**
+!/.reasonix/research/
+!/.reasonix/research/**
+!/.reasonix/prompts/
+!/.reasonix/prompts/**
+!/.reasonix/*.md
 
 # CodeGraph per-project index (rebuilt locally; never committed)
 .codegraph/

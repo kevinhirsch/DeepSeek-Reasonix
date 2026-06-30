@@ -1767,3 +1767,46 @@ func deepSeekSubagentTemperature(e *config.ProviderEntry, configuredTemp float64
 	}
 	return 0.6, true
 }
+
+// loadRolePrompt loads a role-specific subagent prompt from the file system,
+// falling back to the provided default when the file doesn't exist or is empty.
+// Prompt files live in .reasonix/prompts/v1/<role>.md and are plain markdown.
+func loadRolePrompt(role, promptsDir, defaultPrompt string) string {
+	if promptsDir == "" {
+		return defaultPrompt
+	}
+	path := filepath.Join(promptsDir, role+".md")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return defaultPrompt
+	}
+	content := strings.TrimSpace(string(data))
+	if content == "" {
+		return defaultPrompt
+	}
+	return content
+}
+
+// loadDeepSeekNotes loads the shared DeepSeek adaptation notes from
+// .reasonix/prompts/v1/deepseek_notes.md. Returns empty string when missing.
+func loadDeepSeekNotes(promptsDir string) string {
+	if promptsDir == "" {
+		return ""
+	}
+	path := filepath.Join(promptsDir, "deepseek_notes.md")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(data))
+}
+
+// defaultPromptDir returns the v1 prompt directory path under .reasonix/prompts/v1
+// within the given workspace root. Returns "" if the directory does not exist.
+func defaultPromptDir(root string) string {
+	dir := filepath.Join(root, ".reasonix", "prompts", "v1")
+	if _, err := os.Stat(dir); os.IsNotExist(err) {
+		return ""
+	}
+	return dir
+}

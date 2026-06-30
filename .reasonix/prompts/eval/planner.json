@@ -1,0 +1,31 @@
+{
+  "scenarios": [
+    {
+      "name": "testable-steps-with-effort",
+      "input": "Plan how to add rate limiting to the API",
+      "expectations": [
+        {"kind": "output_contains", "value": "Step"},
+        {"kind": "output_contains", "value": "effort"},
+        {"kind": "output_contains", "value": "Done when"},
+        {"kind": "output_not_contains", "value": "improve the code"}
+      ]
+    },
+    {
+      "name": "identifies-dependencies",
+      "input": "Plan the migration from REST to GraphQL",
+      "expectations": [
+        {"kind": "output_contains", "value": "Dependencies"},
+        {"kind": "output_contains", "value": "depends on"},
+        {"kind": "output_not_contains", "value": "just do everything at once"}
+      ]
+    },
+    {
+      "name": "provides-alternatives",
+      "input": "Plan the implementation of a caching layer",
+      "expectations": [
+        {"kind": "output_contains", "value": "Alternative"},
+        {"kind": "output_contains", "value": "Step"}
+      ]
+    }
+  ]
+}

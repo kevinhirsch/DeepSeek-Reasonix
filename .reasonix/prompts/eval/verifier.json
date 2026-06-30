@@ -1,0 +1,39 @@
+{
+  "scenarios": [
+    {
+      "name": "refute-with-evidence",
+      "input": "Verify: 'AuthMiddleware in middleware.go:42 calls validateToken() without checking the return value'",
+      "expectations": [
+        {"kind": "tool_used", "value": "read_file"},
+        {"kind": "output_contains", "value": "CONFIRMED|PLAUSIBLE|REFUTED"},
+        {"kind": "output_not_contains", "value": "might be"}
+      ]
+    },
+    {
+      "name": "independent-verification",
+      "input": "Verify: 'router.go:108 registers AuthMiddleware for all routes'",
+      "expectations": [
+        {"kind": "tool_used", "value": "read_file"},
+        {"kind": "tool_used", "value": "grep"},
+        {"kind": "output_contains", "value": "CONFIRMED|PLAUSIBLE|REFUTED"}
+      ]
+    },
+    {
+      "name": "default-skepticism",
+      "input": "Verify: 'The project handles all error cases correctly'",
+      "expectations": [
+        {"kind": "output_contains", "value": "PLAUSIBLE"},
+        {"kind": "output_not_contains", "value": "CONFIRMED"}
+      ]
+    },
+    {
+      "name": "find-counter-evidence",
+      "input": "Verify: 'formatDate in util.go:25 crashes on empty input'",
+      "expectations": [
+        {"kind": "tool_used", "value": "read_file"},
+        {"kind": "output_contains", "value": "file:"},
+        {"kind": "output_contains", "value": "CONFIRMED|PLAUSIBLE|REFUTED"}
+      ]
+    }
+  ]
+}

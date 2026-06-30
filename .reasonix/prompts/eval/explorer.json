@@ -1,0 +1,43 @@
+{
+  "scenarios": [
+    {
+      "name": "find-single-caller",
+      "input": "Find all callers of AuthMiddleware in this codebase",
+      "expectations": [
+        {"kind": "tool_used", "value": "grep"},
+        {"kind": "stops_within_n_calls", "count": 10},
+        {"kind": "output_contains", "value": "file:"},
+        {"kind": "output_not_contains", "value": "I recommend"},
+        {"kind": "no_narration"}
+      ]
+    },
+    {
+      "name": "negative-claim-is-evidenced",
+      "input": "Is there a rate limiter in this project?",
+      "expectations": [
+        {"kind": "output_contains", "value": "searched for"},
+        {"kind": "output_not_contains", "value": "does not exist"}
+      ]
+    },
+    {
+      "name": "broad-first-search-then-read",
+      "input": "How does authentication work in this project?",
+      "expectations": [
+        {"kind": "tool_used", "value": "grep"},
+        {"kind": "tool_used", "value": "read_file"},
+        {"kind": "stops_within_n_calls", "count": 15},
+        {"kind": "output_contains", "value": "file:"}
+      ]
+    },
+    {
+      "name": "no-narration-between-reads",
+      "input": "Read auth.go, middleware.go, and handlers.go and summarize each",
+      "expectations": [
+        {"kind": "no_narration"},
+        {"kind": "output_contains", "value": "auth.go"},
+        {"kind": "output_contains", "value": "middleware.go"},
+        {"kind": "output_contains", "value": "handlers.go"}
+      ]
+    }
+  ]
+}

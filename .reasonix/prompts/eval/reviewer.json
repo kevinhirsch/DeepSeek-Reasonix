@@ -1,0 +1,31 @@
+{
+  "scenarios": [
+    {
+      "name": "report-every-finding",
+      "input": "Review the changes in auth.go for bugs",
+      "expectations": [
+        {"kind": "tool_used", "value": "read_file"},
+        {"kind": "output_contains", "value": "file:"},
+        {"kind": "output_not_contains", "value": "looks good"},
+        {"kind": "output_contains", "value": "CONFIRMED"}
+      ]
+    },
+    {
+      "name": "specific-failure-scenarios",
+      "input": "Review the diff for potential panics",
+      "expectations": [
+        {"kind": "output_contains", "value": "panic"},
+        {"kind": "output_contains", "value": "file:"},
+        {"kind": "output_contains", "value": "line"}
+      ]
+    },
+    {
+      "name": "distinguish-certainty",
+      "input": "Review handlers.go for correctness",
+      "expectations": [
+        {"kind": "output_contains", "value": "CONFIRMED"},
+        {"kind": "output_contains", "value": "SUSPECTED"}
+      ]
+    }
+  ]
+}
