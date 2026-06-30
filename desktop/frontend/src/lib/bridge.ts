@@ -107,6 +107,44 @@ interface DesktopWindowState {
   maximised: boolean;
 }
 
+// Repo picker / clone types — bridge-specific, mirror Go-side structs.
+interface RepoPickerItem {
+  name: string;
+  fullName: string;
+  description: string;
+  private: boolean;
+  updatedAt: string;
+  cloneUrl: string;
+  htmlUrl: string;
+  language: string;
+}
+
+interface CloneResultView {
+  dir: string;
+  cloned: boolean;
+  branch: string;
+  commit: string;
+  message: string;
+  owner: string;
+  repo: string;
+  error?: string;
+}
+
+interface ClonedRepoView {
+  path: string;
+  name: string;
+  fullName: string;
+  clonedAt: string;
+}
+
+interface RepoCloneProgress {
+  stage: string;
+  progress: number;
+  message: string;
+  repoUrl: string;
+  dir: string;
+}
+
 // AppBindings is the hand-written contract between the React app and the Go
 // kernel. It uses local types (types.ts) so components don't import generated
 // model classes. _CheckGeneratedBindings catches drift: when a Go method is
@@ -219,6 +257,11 @@ export interface AppBindings {
   GitCheckout(branch: string): Promise<void>;
   WorkspaceGitHistory(tabID: string, path: string): Promise<GitCommitView[]>;
   WorkspaceGitCommitDetail(tabID: string, hash: string, path: string): Promise<GitCommitDetailView>;
+  // ── Repo picker & clone ──
+  OpenRepoPicker(filter: string): Promise<RepoPickerItem[]>;
+  CloneRepo(url: string, branch: string, dir: string): Promise<CloneResultView>;
+  ListClonedRepos(): Promise<ClonedRepoView[]>;
+  OpenClonedRepo(path: string): Promise<string>;
   OpenWorkspacePath(rel: string): Promise<void>;
   RevealWorkspacePath(rel: string): Promise<void>;
   RevealPath(path: string): Promise<void>;
@@ -548,6 +591,22 @@ export function onProjectTreeChanged(cb: () => void): () => void {
   return () => {};
 }
 
+// onRepoCloneProgress subscribes to clone progress events emitted by
+// app.CloneRepo. Must match the event name and payload shape in
+// desktop/app_repo.go (repoCloneProgressChannel / RepoCloneProgress).
+export function onRepoCloneProgress(cb: (p: RepoCloneProgress) => void): () => void {
+  if (realApp() && typeof window !== "undefined" && window.runtime) {
+    return window.runtime.EventsOn("repo:clone-progress", (p) => {
+      const parsed = typeof p === "string" ? (JSON.parse(p) as RepoCloneProgress) : (p as RepoCloneProgress);
+      cb(parsed);
+    });
+  }
+  repoCloneListeners.add(cb);
+  return () => {
+    repoCloneListeners.delete(cb);
+  };
+}
+
 // app proxies each call to the live binding (or the dev mock only when truly
 // outside the shell), so a late-injected window.go is picked up transparently.
 function bridgeBreadcrumb(method: string): string {
@@ -567,6 +626,8 @@ function bridgeBreadcrumb(method: string): string {
     return `skill ${method}`;
   if (/^(OpenProjectTab|OpenGlobalTab|OpenTopicSession|EnsureBlankTab|ActivateTopic|EnsureBlankSurface|SetActiveTab|CloseTab|ReorderTabs|CreateTopic|RenameTopic|DeleteTopic|TrashTopic|RenameProject|RemoveWorkspace|SwitchWorkspace|PickWorkspace)/.test(method))
     return `nav ${method}`;
+  if (/^(OpenRepoPicker|CloneRepo|ListClonedRepos|OpenClonedRepo)/.test(method))
+    return `repo ${method}`;
   return "";
 }
 
@@ -646,6 +707,13 @@ const updaterListeners = new Set<(p: UpdateProgress) => void>();
 
 function emitUpdater(p: UpdateProgress) {
   updaterListeners.forEach((l) => l(p));
+}
+
+// Repo clone progress listener set for the browser dev mock.
+const repoCloneListeners = new Set<(p: RepoCloneProgress) => void>();
+
+function emitRepoProgress(p: RepoCloneProgress) {
+  repoCloneListeners.forEach((l) => l(p));
 }
 
 function delay(ms: number): Promise<void> {
@@ -2330,6 +2398,53 @@ function makeMockApp(): AppBindings {
         return { diff: "--- a/mock\n+++ b/mock\n@@ -1,1 +1,1 @@\n-mock\n+mock diff" };
       }
       return { files: ["mock_file_1.ts", "mock_file_2.ts"] };
+    },
+    // ── Repo picker & clone mocks ──
+    async OpenRepoPicker(filter: string) {
+      await delay(400);
+      const allRepos: RepoPickerItem[] = [
+        { name: "reasonix", fullName: "kevinhirsch/DeepSeek-Reasonix", description: "DeepSeek-powered coding agent with desktop GUI.", private: false, updatedAt: new Date(Date.now() - 86_400_000).toISOString(), cloneUrl: "https://github.com/kevinhirsch/DeepSeek-Reasonix.git", htmlUrl: "https://github.com/kevinhirsch/DeepSeek-Reasonix", language: "Go" },
+        { name: "joyquant-db", fullName: "kevinhirsch/joyquant-db", description: "Quantitative trading database layer.", private: true, updatedAt: new Date(Date.now() - 172_800_000).toISOString(), cloneUrl: "https://github.com/kevinhirsch/joyquant-db.git", htmlUrl: "https://github.com/kevinhirsch/joyquant-db", language: "TypeScript" },
+        { name: "blade", fullName: "kevinhirsch/blade", description: "High-performance backtesting engine.", private: true, updatedAt: new Date(Date.now() - 604_800_000).toISOString(), cloneUrl: "https://github.com/kevinhirsch/blade.git", htmlUrl: "https://github.com/kevinhirsch/blade", language: "Rust" },
+        { name: "cli-toolkit", fullName: "kevinhirsch/cli-toolkit", description: "Shared CLI utilities and formatters.", private: false, updatedAt: new Date(Date.now() - 2_592_000_000).toISOString(), cloneUrl: "https://github.com/kevinhirsch/cli-toolkit.git", htmlUrl: "https://github.com/kevinhirsch/cli-toolkit", language: "Python" },
+      ];
+      const q = filter.toLowerCase().trim();
+      if (q === "mine") return allRepos;
+      if (q === "starred") return [allRepos[0], allRepos[2]];
+      if (q) return allRepos.filter((r) => r.fullName.toLowerCase().includes(q) || r.description.toLowerCase().includes(q));
+      return allRepos;
+    },
+    async CloneRepo(url: string, _branch: string, _dir: string) {
+      // Stream mock progress through the dev listener set, matching the real
+      // Go-side event shape so the RepoSetupProgress UI works in browser dev.
+      const owner = "mock-owner";
+      const repo = url.split("/").pop()?.replace(".git", "") ?? "mock-repo";
+      const dir = _dir || `~/reasonix-projects/${owner}-${repo}`;
+
+      const stream = (stage: string, progress: number, message = "") => {
+        window.setTimeout(() => emitRepoProgress({ stage, progress, message, repoUrl: url, dir }), 0);
+      };
+
+      stream("cloning", 0.1);
+      await delay(600);
+      stream("cloning", 0.3);
+      await delay(500);
+      stream("detecting", 0.55);
+      await delay(300);
+      stream("init", 0.75, "Go");
+      await delay(400);
+      stream("ready", 1.0);
+      await delay(100);
+
+      return { dir, cloned: true, branch: "main", commit: "a1b2c3d4e5f6", message: "Initial commit (mock)", owner, repo };
+    },
+    async ListClonedRepos() {
+      return [
+        { path: "~/reasonix-projects/kevinhirsch-DeepSeek-Reasonix", name: "kevinhirsch-DeepSeek-Reasonix (main)", fullName: "kevinhirsch/DeepSeek-Reasonix", clonedAt: new Date(Date.now() - 86_400_000).toISOString() },
+      ] as ClonedRepoView[];
+    },
+    async OpenClonedRepo(path: string) {
+      return mockSwitchWorkspace(path);
     },
     async OpenWorkspacePath(rel: string) {
       console.info("mock OpenWorkspacePath", rel);

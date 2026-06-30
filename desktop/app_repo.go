@@ -2,31 +2,25 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
+
+	"github.com/wailsapp/wails/v2/pkg/runtime"
 
 	"reasonix/internal/git"
 	"reasonix/internal/github"
 )
 
-// CloneResult is returned to the frontend after a clone operation.
-type CloneResult struct {
-	Owner       string `json:"owner"`
-	Repo        string `json:"repo"`
-	Branch      string `json:"branch"`
-	Commit      string `json:"commit"`
-	Message     string `json:"commitMessage"`
-	ProjectType string `json:"projectType"`
-	Dir         string `json:"dir"`
-	Cloned      bool   `json:"cloned"`
-	HasAgentDocs bool  `json:"hasAgentDocs"`
-}
+// ── Repo picker types (mirrored in the frontend bridge) ──
 
-// RepoInfo is a lightweight repo description for the frontend picker.
-type RepoInfo struct {
+// RepoPickerItem is one repository returned to the frontend's repo picker.
+type RepoPickerItem struct {
 	Name        string `json:"name"`
 	FullName    string `json:"fullName"`
 	Description string `json:"description"`
@@ -35,251 +29,243 @@ type RepoInfo struct {
 	CloneURL    string `json:"cloneUrl"`
 	HTMLURL     string `json:"htmlUrl"`
 	Language    string `json:"language"`
-	IsCloned    bool   `json:"isCloned"`
-	LocalPath   string `json:"localPath,omitempty"`
 }
 
-// ListClonedRepos returns all repos that have already been cloned locally.
-func (a *App) ListClonedRepos() []RepoInfo {
-	home, _ := os.UserHomeDir()
-	projectsDir := filepath.Join(home, "reasonix-projects")
-	entries, err := os.ReadDir(projectsDir)
-	if err != nil {
-		return nil
-	}
-	var repos []RepoInfo
-	for _, e := range entries {
-		if !e.IsDir() {
-			continue
-		}
-		dir := filepath.Join(projectsDir, e.Name())
-		if !git.IsRepo(dir) {
-			continue
-		}
-		owner, repo := parseOwnerRepoDir(e.Name())
-		branch := git.CurrentBranch(dir)
-		commit, _ := git.LastCommit(dir)
-		repos = append(repos, RepoInfo{
-			Name:      repo,
-			FullName:  owner + "/" + repo,
-			Branch:    branch,
-			Commit:    commit,
-			IsCloned:  true,
-			LocalPath: dir,
-			UpdatedAt: dirModTime(dir).Format(time.RFC3339),
-		})
-	}
-	return repos
+// CloneResultView is the frontend-facing clone outcome.
+type CloneResultView struct {
+	Dir     string `json:"dir"`
+	Cloned  bool   `json:"cloned"`
+	Branch  string `json:"branch"`
+	Commit  string `json:"commit"`
+	Message string `json:"message"`
+	Owner   string `json:"owner"`
+	Repo    string `json:"repo"`
+	Error   string `json:"error,omitempty"`
 }
 
-// OpenClonedRepo switches the workspace to an already-cloned repo directory.
-func (a *App) OpenClonedRepo(path string) error {
-	if !git.IsRepo(path) {
-		return fmt.Errorf("%q is not a git repository", path)
-	}
-	a.config.WorkspaceRoot = path
-	projectType := git.DetectProjectType(path)
-	branch := git.CurrentBranch(path)
-	commit, message := git.LastCommit(path)
-	contextMsg := fmt.Sprintf(
-		"Connected to %s on branch %s.\nLast commit: %s — %s.\nProject type: %s.",
-		filepath.Base(path), branch, commit, message, projectType,
-	)
-	_ = contextMsg // emitted via status update
-	return a.switchWorkspaceTab(path)
+// ClonedRepoView is one already-cloned repo directory.
+type ClonedRepoView struct {
+	Path     string `json:"path"`
+	Name     string `json:"name"`
+	FullName string `json:"fullName"`
+	ClonedAt string `json:"clonedAt"`
 }
 
-// CloneRepo clones a GitHub repository and switches to it.
-func (a *App) CloneRepo(url, branch string) (*CloneResult, error) {
-	owner, repo, ok := git.ParseGitHubURL(url)
-	if !ok {
-		return nil, fmt.Errorf("unsupported URL: %s", url)
-	}
-	dir := git.DefaultCloneDir(owner, repo)
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-	defer cancel()
-
-	result, err := git.Clone(ctx, url, dir, branch)
-	if err != nil {
-		return nil, err
-	}
-	projectType := git.DetectProjectType(result.Dir)
-	return &CloneResult{
-		Owner:        result.Owner,
-		Repo:         result.Repo,
-		Branch:       result.Branch,
-		Commit:       result.Commit,
-		Message:      result.Message,
-		ProjectType:  projectType,
-		Dir:          result.Dir,
-		Cloned:       result.Cloned,
-		HasAgentDocs: git.HasAgentDocs(result.Dir),
-	}, nil
+// RepoCloneProgress is emitted on the "repo:clone-progress" event channel
+// during CloneRepo so the frontend can animate a stage-by-stage progress UI.
+type RepoCloneProgress struct {
+	Stage    string  `json:"stage"`    // "cloning" | "detecting" | "init" | "ready" | "error"
+	Progress float64 `json:"progress"` // 0.0 – 1.0
+	Message  string  `json:"message"`
+	RepoURL  string  `json:"repoUrl"`
+	Dir      string  `json:"dir"`
 }
 
-// ListGitHubRepos lists the user's GitHub repositories.
-func (a *App) ListGitHubRepos(max int) ([]RepoInfo, error) {
+const repoCloneProgressChannel = "repo:clone-progress"
+
+// ── Bound methods ──
+
+// OpenRepoPicker returns a list of GitHub repos for the frontend's repo picker.
+// filter is "mine" (user repos), "starred" (starred repos), or a free-text
+// search query. Returns an error when no GitHub token is configured.
+func (a *App) OpenRepoPicker(filter string) ([]RepoPickerItem, error) {
 	token := github.LoadToken()
 	if token == "" {
-		return nil, fmt.Errorf("not authenticated — run reasonix github login")
+		return nil, fmt.Errorf("no github token: connect your GitHub account first")
 	}
+
 	client := github.NewClient(token)
-	ctx := context.Background()
-	ghRepos, err := client.ListUserRepos(ctx, max)
+	ctx := a.bootContext()
+
+	var repos []github.RepoInfo
+	var err error
+
+	switch strings.ToLower(strings.TrimSpace(filter)) {
+	case "starred":
+		repos, err = client.ListStarredRepos(ctx, 50)
+	case "mine":
+		repos, err = client.ListUserRepos(ctx, 50)
+	default:
+		q := strings.TrimSpace(filter)
+		if q == "" {
+			repos, err = client.ListUserRepos(ctx, 50)
+		} else {
+			repos, err = client.SearchRepos(ctx, q, 30)
+		}
+	}
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("github api: %w", err)
 	}
-	cloned := make(map[string]bool)
-	for _, r := range a.ListClonedRepos() {
-		cloned[r.FullName] = true
-	}
-	var out []RepoInfo
-	for _, r := range ghRepos {
-		out = append(out, RepoInfo{
+
+	out := make([]RepoPickerItem, 0, len(repos))
+	for _, r := range repos {
+		desc := strings.TrimSpace(r.Description)
+		out = append(out, RepoPickerItem{
 			Name:        r.Name,
 			FullName:    r.FullName,
-			Description: r.Description,
+			Description: desc,
 			Private:     r.Private,
 			UpdatedAt:   r.UpdatedAt,
 			CloneURL:    r.CloneURL,
 			HTMLURL:     r.HTMLURL,
 			Language:    r.Language,
-			IsCloned:    cloned[r.FullName],
 		})
 	}
 	return out, nil
 }
 
-// ListStarredRepos lists the user's starred GitHub repositories.
-func (a *App) ListStarredRepos() ([]RepoInfo, error) {
-	token := github.LoadToken()
-	if token == "" {
-		return nil, fmt.Errorf("not authenticated")
+// CloneRepo clones a git repository URL to dir, streaming progress events on
+// the "repo:clone-progress" channel. If dir already exists and is a git repo,
+// it fetches the latest instead of re-cloning. Returns the clone result.
+func (a *App) CloneRepo(url, branch, dir string) (*CloneResultView, error) {
+	url = strings.TrimSpace(url)
+	branch = strings.TrimSpace(branch)
+	dir = normalizeCloneDir(strings.TrimSpace(dir), url)
+
+	a.emitRepoProgress("cloning", 0.15, "", url, dir)
+
+	result, err := git.Clone(context.Background(), url, dir, branch)
+	if err != nil {
+		a.emitRepoProgress("error", 0, err.Error(), url, dir)
+		return &CloneResultView{Error: err.Error()}, err
 	}
-	client := github.NewClient(token)
-	ctx := context.Background()
-	ghRepos, err := client.ListStarredRepos(ctx, 30)
+
+	a.emitRepoProgress("detecting", 0.55, "", url, dir)
+	projectType := git.DetectProjectType(dir)
+
+	a.emitRepoProgress("init", 0.75, projectType, url, dir)
+
+	// Run any project-specific init (the kernel boot will do the full init
+	// when the workspace is opened; here we just note what was detected).
+	_ = projectType
+
+	a.emitRepoProgress("ready", 1.0, "", url, dir)
+
+	// Persist the clone as a known workspace entry so it appears in the
+	// project list and the ListClonedRepos inventory.
+	saveWorkspace(dir)
+
+	return &CloneResultView{
+		Dir:     result.Dir,
+		Cloned:  result.Cloned,
+		Branch:  result.Branch,
+		Commit:  result.Commit,
+		Message: result.Message,
+		Owner:   result.Owner,
+		Repo:    result.Repo,
+	}, nil
+}
+
+// ListClonedRepos returns every cloned repository discovered under the
+// standard reasonix-projects directory.
+func (a *App) ListClonedRepos() ([]ClonedRepoView, error) {
+	home, err := os.UserHomeDir()
 	if err != nil {
 		return nil, err
 	}
-	cloned := make(map[string]bool)
-	for _, r := range a.ListClonedRepos() {
-		cloned[r.FullName] = true
+	root := filepath.Join(home, "reasonix-projects")
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return []ClonedRepoView{}, nil
+		}
+		return nil, err
 	}
-	var out []RepoInfo
-	for _, r := range ghRepos {
-		out = append(out, RepoInfo{
-			Name:      r.Name,
-			FullName:  r.FullName,
-			Description: r.Description,
-			Private:   r.Private,
-			UpdatedAt: r.UpdatedAt,
-			CloneURL:  r.CloneURL,
-			HTMLURL:   r.HTMLURL,
-			Language:  r.Language,
-			IsCloned:  cloned[r.FullName],
+
+	var out []ClonedRepoView
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		dir := filepath.Join(root, entry.Name())
+		if !git.IsRepo(dir) {
+			continue
+		}
+		info, err := entry.Info()
+		modTime := ""
+		if err == nil {
+			modTime = info.ModTime().UTC().Format(time.RFC3339)
+		}
+
+		branch := git.CurrentBranch(dir)
+		fullName := entry.Name() // default: dir name
+		// Try to derive owner/repo from the git remote.
+		if o, r, ok := git.ParseGitHubURL(remoteURL(dir)); ok {
+			fullName = o + "/" + r
+		}
+		name := entry.Name()
+		if branch != "unknown" {
+			name = name + " (" + branch + ")"
+		}
+
+		out = append(out, ClonedRepoView{
+			Path:     dir,
+			Name:     name,
+			FullName: fullName,
+			ClonedAt: modTime,
 		})
 	}
+
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].ClonedAt > out[j].ClonedAt
+	})
 	return out, nil
 }
 
-// GitHubLoginStatus returns the current GitHub authentication status.
-func (a *App) GitHubLoginStatus() string {
-	token := github.LoadToken()
-	if token == "" {
-		return "disconnected"
-	}
-	return "connected"
+// OpenClonedRepo opens a previously cloned repo directory and switches the
+// active workspace to it. It returns the normalized workspace root path.
+func (a *App) OpenClonedRepo(path string) (string, error) {
+	return a.SwitchWorkspace(path)
 }
 
-// ListRemotes returns configured remote workers.
-func (a *App) ListRemotes() []map[string]interface{} {
-	var out []map[string]interface{}
-	for _, r := range a.config.Remotes {
-		out = append(out, map[string]interface{}{
-			"name":          r.Name,
-			"url":           r.URL,
-			"maxConcurrent": r.MaxConcurrent,
-			"preferFor":     r.PreferFor,
-		})
-	}
-	return out
-}
+// ── helpers ──
 
-// GetBackgroundTasks returns live subagent status from all sessions.
-func (a *App) GetBackgroundTasks() interface{} {
-	type taskView struct {
-		ID            string `json:"id"`
-		Kind          string `json:"kind"`
-		Label         string `json:"label"`
-		Status        string `json:"status"`
-		ToolCalls     int    `json:"toolCalls"`
-		LastTool      string `json:"lastTool"`
-		LastReasoning string `json:"lastReasoning"`
-		Model         string `json:"model"`
-		Effort        string `json:"effort"`
+func (a *App) emitRepoProgress(stage string, progress float64, message, url, dir string) {
+	if a.ctx == nil {
+		return
 	}
-	var tasks []taskView
-	for _, tab := range a.tabs {
-		if tab.ctrl == nil {
-			continue
-		}
-		for _, jv := range tab.ctrl.Jobs() {
-			tasks = append(tasks, taskView{
-				ID:            jv.ID,
-				Kind:          jv.Kind,
-				Label:         jv.Label,
-				Status:        jv.Status,
-				ToolCalls:     jv.ToolCalls,
-				LastTool:      jv.LastTool,
-				LastReasoning: jv.LastReasoning,
-				Model:         jv.Model,
-				Effort:        jv.Effort,
-			})
-		}
-	}
-	return tasks
-}
-
-// SendToSubagent sends a mid-task message to a running background subagent.
-func (a *App) SendToSubagent(subagentID, message string) error {
-	for _, tab := range a.tabs {
-		if tab.ctrl == nil {
-			continue
-		}
-		// Steer via the controller's messenger
-		if err := tab.ctrl.SteerSubagent(subagentID, message); err != nil {
-			continue
-		}
-		return nil
-	}
-	return fmt.Errorf("subagent %q not found", subagentID)
-}
-
-func (a *App) switchWorkspaceTab(path string) error {
-	// Switch the current tab's workspace to the cloned repo
-	for _, tab := range a.tabs {
-		if tab.workspaceRoot == "" || tab.workspaceRoot == a.config.WorkspaceRoot {
-			tab.workspaceRoot = path
-			return nil
-		}
-	}
-	return nil
-}
-
-func parseOwnerRepoDir(name string) (owner, repo string) {
-	// Directories are named <owner>-<repo>
-	idx := strings.Index(name, "-")
-	if idx < 0 {
-		return "", name
-	}
-	return name[:idx], name[idx+1:]
-}
-
-func dirModTime(dir string) time.Time {
-	info, err := os.Stat(dir)
+	payload, err := json.Marshal(RepoCloneProgress{
+		Stage:    stage,
+		Progress: progress,
+		Message:  message,
+		RepoURL:  url,
+		Dir:      dir,
+	})
 	if err != nil {
-		return time.Time{}
+		return
 	}
-	return info.ModTime()
+	runtime.EventsEmit(a.ctx, repoCloneProgressChannel, string(payload))
+}
+
+func normalizeCloneDir(dir, url string) string {
+	if dir != "" {
+		if abs, err := filepath.Abs(dir); err == nil {
+			return abs
+		}
+		return dir
+	}
+	owner, repo, ok := git.ParseGitHubURL(url)
+	if !ok {
+		// Fall back to extracting the last path segment.
+		repo = filepath.Base(strings.TrimSuffix(url, ".git"))
+		owner = ""
+	}
+	if owner != "" {
+		return git.DefaultCloneDir(owner, repo)
+	}
+	home, _ := os.UserHomeDir()
+	if home == "" {
+		return repo
+	}
+	return filepath.Join(home, "reasonix-projects", repo)
+}
+
+func remoteURL(dir string) string {
+	cmd := exec.Command("git", "remote", "get-url", "origin")
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
 }

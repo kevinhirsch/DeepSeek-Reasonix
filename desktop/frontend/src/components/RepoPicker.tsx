@@ -1,6 +1,10 @@
-import { useState, useEffect, useCallback } from "react";
-import { Search, Star, Lock, Clock, GitBranch, Download, FolderOpen, Loader2, ExternalLink } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { GitBranch, Search, Star, Lock, Clock, Download, FolderOpen, Loader2, AlertCircle } from "lucide-react";
+import { useT } from "../lib/i18n";
 import { app } from "../lib/bridge";
+import type { ReactNode } from "react";
+
+// ── Local types (mirror the Go-side RepoPickerItem / ClonedRepoView) ──
 
 interface RepoInfo {
   name: string;
@@ -11,183 +15,324 @@ interface RepoInfo {
   cloneUrl: string;
   htmlUrl: string;
   language: string;
-  isCloned: boolean;
-  localPath?: string;
 }
 
-type Tab = "my-repos" | "starred" | "search";
+interface ClonedRepo {
+  path: string;
+  name: string;
+  fullName: string;
+  clonedAt: string;
+}
 
-export function RepoPicker() {
-  const [tab, setTab] = useState<Tab>("my-repos");
+type FilterTab = "mine" | "starred" | "search";
+
+// ── Helpers ──
+
+function timeAgo(iso: string): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return iso.slice(0, 10);
+  const now = Date.now();
+  const diff = now - d.getTime();
+  const mins = Math.floor(diff / 60_000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  const days = Math.floor(hrs / 24);
+  if (days < 30) return `${days}d ago`;
+  const months = Math.floor(days / 30);
+  if (months < 12) return `${months}mo ago`;
+  return `${Math.floor(months / 12)}y ago`;
+}
+
+// ── Skeleton row ──
+
+function SkeletonRow() {
+  return (
+    <div className="repo-picker__item repo-picker__item--skeleton" aria-hidden="true">
+      <span className="repo-picker__skeleton-icon" />
+      <span className="repo-picker__skeleton-body">
+        <span className="repo-picker__skeleton-line repo-picker__skeleton-line--name" />
+        <span className="repo-picker__skeleton-line repo-picker__skeleton-line--desc" />
+      </span>
+    </div>
+  );
+}
+
+// ── Main component ──
+
+export function RepoPicker({
+  workspaceRoot,
+  onClose,
+  onRepoOpened,
+}: {
+  workspaceRoot: string;
+  onClose: () => void;
+  onRepoOpened: (path: string) => void;
+}) {
+  const t = useT();
+
+  const [tab, setTab] = useState<FilterTab>("mine");
+  const [query, setQuery] = useState("");
   const [repos, setRepos] = useState<RepoInfo[]>([]);
+  const [clonedRepos, setClonedRepos] = useState<ClonedRepo[]>([]);
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
-  const [searchQuery, setSearchQuery] = useState("");
-  const [cloning, setCloning] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [cloningFullName, setCloningFullName] = useState<string | null>(null);
 
-  const fetchRepos = useCallback(async () => {
+  // Track whether the component is mounted for safe async state updates.
+  const mountedRef = useRef(true);
+  useEffect(() => () => { mountedRef.current = false; }, []);
+
+  // ── Data fetching ──
+
+  const loadRepos = useCallback(async () => {
     setLoading(true);
-    setError("");
+    setError(null);
     try {
-      if (tab === "my-repos") {
-        const result = await app.ListGitHubRepos(30);
-        setRepos(result || []);
-      } else if (tab === "starred") {
-        const result = await app.ListStarredRepos();
-        setRepos(result || []);
+      const filter = tab === "search" ? query : tab;
+      const result = await app.OpenRepoPicker(filter);
+      if (mountedRef.current) setRepos(result);
+    } catch (err) {
+      if (mountedRef.current) {
+        setError(String(err));
+        setRepos([]);
       }
-    } catch (e) {
-      setError(String(e));
-      setRepos([]);
     } finally {
-      setLoading(false);
+      if (mountedRef.current) setLoading(false);
     }
-  }, [tab]);
+  }, [tab, query]);
+
+  const loadClonedRepos = useCallback(async () => {
+    try {
+      const result = await app.ListClonedRepos();
+      if (mountedRef.current) setClonedRepos(result);
+    } catch {
+      // non-fatal — cloned-repo detection is best-effort
+    }
+  }, []);
 
   useEffect(() => {
-    if (tab !== "search") fetchRepos();
-  }, [tab, fetchRepos]);
+    void loadRepos();
+  }, [loadRepos]);
+
+  useEffect(() => {
+    void loadClonedRepos();
+  }, [loadClonedRepos]);
+
+  // Debounced search: only fire when the user stops typing.
+  useEffect(() => {
+    if (tab !== "search") return;
+    const id = window.setTimeout(() => {
+      if (query.trim()) void loadRepos();
+    }, 400);
+    return () => window.clearTimeout(id);
+  }, [query, tab, loadRepos]);
+
+  // ── Derived state ──
+
+  const clonedMap = useMemo(() => {
+    const m = new Map<string, string>(); // fullName → localPath
+    for (const r of clonedRepos) {
+      m.set(r.fullName, r.path);
+    }
+    return m;
+  }, [clonedRepos]);
+
+  // ── Actions ──
 
   const handleClone = async (repo: RepoInfo) => {
-    setCloning(repo.fullName);
+    setCloningFullName(repo.fullName);
+    setError(null);
     try {
-      await app.CloneRepo(repo.cloneUrl, "");
-    } catch (e) {
-      setError(String(e));
+      const dir = workspaceRoot
+        ? `${workspaceRoot.replace(/[/\\]+$/, "")}/${repo.name}`
+        : "";
+      const result = await app.CloneRepo(repo.cloneUrl, "", dir);
+      if (mountedRef.current) {
+        await loadClonedRepos();
+        onRepoOpened(result.dir);
+      }
+    } catch (err) {
+      if (mountedRef.current) setError(String(err));
     } finally {
-      setCloning(null);
+      if (mountedRef.current) setCloningFullName(null);
     }
   };
 
-  const handleOpen = async (repo: RepoInfo) => {
-    if (repo.localPath) {
-      await app.OpenClonedRepo(repo.localPath);
+  const handleOpen = async (fullName: string) => {
+    const path = clonedMap.get(fullName);
+    if (path) onRepoOpened(path);
+  };
+
+  // ── Language badge colour map ──
+
+  const langClass = (lang: string): string => {
+    const key = lang?.toLowerCase() || "";
+    if (key === "go") return "repo-picker__badge--go";
+    if (key === "typescript" || key === "javascript") return "repo-picker__badge--ts";
+    if (key === "python") return "repo-picker__badge--py";
+    if (key === "rust") return "repo-picker__badge--rust";
+    return "";
+  };
+
+  // ── Render helpers ──
+
+  const tabLabel = (t: FilterTab): string => {
+    switch (t) {
+      case "mine": return "My Repos";
+      case "starred": return "Starred";
+      case "search": return "Search";
     }
   };
 
-  const filtered = searchQuery
-    ? repos.filter((r) =>
-        r.fullName.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        r.description?.toLowerCase().includes(searchQuery.toLowerCase())
-      )
-    : repos;
+  const tabIcon = (t: FilterTab): ReactNode => {
+    switch (t) {
+      case "mine": return <GitBranch size={14} />;
+      case "starred": return <Star size={14} />;
+      case "search": return <Search size={14} />;
+    }
+  };
+
+  // ── Render ──
 
   return (
-    <div className="repo-picker flex flex-col h-full" role="dialog" aria-label="Repository picker">
-      <div className="flex items-center gap-2 p-3 border-b border-gray-200 dark:border-gray-700">
-        <div className="flex gap-1">
-          {(["my-repos", "starred", "search"] as Tab[]).map((t) => (
+    <div className="repo-picker" role="dialog" aria-label="Repository picker">
+      {/* Header */}
+      <div className="repo-picker__header">
+        <div className="repo-picker__tabs" role="tablist">
+          {(["mine", "starred", "search"] as FilterTab[]).map((t) => (
             <button
               key={t}
-              onClick={() => setTab(t)}
-              className={`px-3 py-1 text-sm rounded ${tab === t ? "bg-blue-600 text-white" : "text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800"}`}
-              aria-pressed={tab === t}
+              role="tab"
+              aria-selected={tab === t}
+              className={`repo-picker__tab${tab === t ? " repo-picker__tab--active" : ""}`}
+              onClick={() => { setTab(t); setError(null); }}
             >
-              {t === "my-repos" ? "My Repos" : t === "starred" ? "Starred" : "Search"}
+              {tabIcon(t)}
+              <span>{tabLabel(t)}</span>
             </button>
           ))}
         </div>
         {tab === "search" && (
-          <div className="relative flex-1">
-            <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+          <div className="repo-picker__search">
+            <Search size={16} className="repo-picker__search-icon" aria-hidden="true" />
             <input
               type="text"
-              placeholder="Search repositories..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full pl-8 pr-3 py-1 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-900"
-              aria-label="Search repositories"
+              className="repo-picker__search-input"
+              placeholder={t("repoPicker.searchPlaceholder")}
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              aria-label={t("repoPicker.searchLabel")}
             />
           </div>
         )}
       </div>
 
-      <div className="flex-1 overflow-y-auto">
+      {/* Body */}
+      <div className="repo-picker__body">
+        {/* Loading skeleton */}
         {loading && (
-          <div className="p-4 space-y-3">
-            {[1, 2, 3, 4, 5].map((i) => (
-              <div key={i} className="animate-pulse flex gap-3 p-3">
-                <div className="w-5 h-5 bg-gray-200 dark:bg-gray-700 rounded" />
-                <div className="flex-1 space-y-2">
-                  <div className="h-4 bg-gray-200 dark:bg-gray-700 rounded w-1/3" />
-                  <div className="h-3 bg-gray-200 dark:bg-gray-700 rounded w-2/3" />
-                </div>
-              </div>
+          <div className="repo-picker__list">
+            {Array.from({ length: 5 }).map((_, i) => (
+              <SkeletonRow key={i} />
             ))}
           </div>
         )}
 
-        {error && (
-          <div className="p-4 text-red-600 text-sm text-center" role="alert">{error}</div>
-        )}
-
-        {!loading && !error && filtered.length === 0 && (
-          <div className="p-8 text-center text-gray-400">
-            <GitBranch className="w-8 h-8 mx-auto mb-2 opacity-50" />
-            <p className="text-sm">No repositories found</p>
-            {tab === "my-repos" && (
-              <p className="text-xs mt-1">Connect your GitHub account to see your repos</p>
-            )}
+        {/* Error */}
+        {!loading && error && (
+          <div className="repo-picker__error" role="alert">
+            <AlertCircle size={18} aria-hidden="true" />
+            <span className="repo-picker__error-text">{error}</span>
           </div>
         )}
 
-        {!loading && filtered.map((repo) => (
-          <div
-            key={repo.fullName}
-            className="flex items-center gap-3 p-3 hover:bg-gray-50 dark:hover:bg-gray-800 border-b border-gray-100 dark:border-gray-800"
-          >
-            <GitBranch className="w-4 h-4 text-blue-500 flex-shrink-0" />
-            <div className="flex-1 min-w-0">
-              <div className="flex items-center gap-2">
-                <span className="text-sm font-medium truncate">{repo.fullName}</span>
-                {repo.private && <Lock className="w-3 h-3 text-yellow-500" title="Private" />}
-                {repo.language && (
-                  <span className="text-xs px-1.5 py-0.5 rounded bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300">
-                    {repo.language}
-                  </span>
-                )}
-              </div>
-              {repo.description && (
-                <p className="text-xs text-gray-500 truncate mt-0.5">{repo.description}</p>
-              )}
-              <div className="flex items-center gap-3 mt-1 text-xs text-gray-400">
-                <span className="flex items-center gap-1"><Clock className="w-3 h-3" />{repo.updatedAt?.slice(0, 10)}</span>
-              </div>
-            </div>
-            <div className="flex items-center gap-1 flex-shrink-0">
-              <a
-                href={repo.htmlUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="p-1.5 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
-                aria-label={`Open ${repo.fullName} on GitHub`}
-              >
-                <ExternalLink className="w-4 h-4" />
-              </a>
-              {repo.isCloned ? (
-                <button
-                  onClick={() => handleOpen(repo)}
-                  className="flex items-center gap-1 px-3 py-1 text-sm bg-green-600 text-white rounded hover:bg-green-700"
-                >
-                  <FolderOpen className="w-3.5 h-3.5" /> Open
-                </button>
-              ) : (
-                <button
-                  onClick={() => handleClone(repo)}
-                  disabled={cloning === repo.fullName}
-                  className="flex items-center gap-1 px-3 py-1 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50"
-                >
-                  {cloning === repo.fullName ? (
-                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                  ) : (
-                    <Download className="w-3.5 h-3.5" />
-                  )}
-                  Clone
-                </button>
-              )}
-            </div>
+        {/* Empty state */}
+        {!loading && !error && repos.length === 0 && (
+          <div className="repo-picker__empty">
+            <GitBranch size={32} className="repo-picker__empty-icon" aria-hidden="true" />
+            <p className="repo-picker__empty-title">
+              {tab === "search" && query.trim()
+                ? t("repoPicker.noSearchResults")
+                : t("repoPicker.noRepos")}
+            </p>
+            <p className="repo-picker__empty-hint">
+              {tab === "mine"
+                ? t("repoPicker.connectHint")
+                : ""}
+            </p>
           </div>
-        ))}
+        )}
+
+        {/* Repo list */}
+        {!loading && repos.length > 0 && (
+          <div className="repo-picker__list">
+            {repos.map((repo) => {
+              const isCloned = clonedMap.has(repo.fullName);
+              const isCloning = cloningFullName === repo.fullName;
+
+              return (
+                <div key={repo.fullName} className="repo-picker__item">
+                  <GitBranch size={16} className="repo-picker__item-icon" aria-hidden="true" />
+
+                  <div className="repo-picker__item-main">
+                    <div className="repo-picker__item-top">
+                      <span className="repo-picker__item-name" title={repo.fullName}>
+                        {repo.fullName}
+                      </span>
+                      {repo.private && (
+                        <Lock size={12} className="repo-picker__private" title="Private" aria-label="Private repository" />
+                      )}
+                      {repo.language && (
+                        <span className={`repo-picker__badge ${langClass(repo.language)}`}>
+                          {repo.language}
+                        </span>
+                      )}
+                    </div>
+
+                    {repo.description && (
+                      <p className="repo-picker__item-desc">{repo.description}</p>
+                    )}
+
+                    <span className="repo-picker__item-meta">
+                      <Clock size={12} aria-hidden="true" />
+                      <span>{timeAgo(repo.updatedAt)}</span>
+                    </span>
+                  </div>
+
+                  <div className="repo-picker__item-actions">
+                    {isCloned ? (
+                      <button
+                        className="repo-picker__action repo-picker__action--open"
+                        onClick={() => handleOpen(repo.fullName)}
+                        title={t("repoPicker.openRepo")}
+                      >
+                        <FolderOpen size={14} />
+                        <span>{t("repoPicker.open")}</span>
+                      </button>
+                    ) : (
+                      <button
+                        className="repo-picker__action repo-picker__action--clone"
+                        onClick={() => handleClone(repo)}
+                        disabled={isCloning}
+                        title={t("repoPicker.cloneRepo")}
+                      >
+                        {isCloning ? (
+                          <Loader2 size={14} className="repo-picker__spin" />
+                        ) : (
+                          <Download size={14} />
+                        )}
+                        <span>{isCloning ? t("repoPicker.cloning") : t("repoPicker.clone")}</span>
+                      </button>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
       </div>
     </div>
   );
