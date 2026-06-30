@@ -991,6 +991,41 @@ func (a *Agent) Run(ctx context.Context, input string) (runErr error) {
 		})
 
 		if len(calls) == 0 {
+				// Gate 1: Promise detection — if the model's final answer
+				// ends with "I'll..." or similar, it's promising future
+				// work instead of executing it now.
+				if promiseCtx, isPromise := detectUnfulfilledPromise(text); isPromise {
+					event.RecordReadinessAudit(a.sink, evidence.ReadinessAudit{
+						Result:  evidence.ReadinessBlocked,
+						Applies: true,
+					})
+					a.sink.Emit(event.Event{Kind: event.Notice, Level: event.LevelWarn, Text: "final-answer readiness blocked: promise detected"})
+					a.session.Add(provider.Message{Role: provider.RoleUser, Content: a.withTurnPreferences(promiseRetryMessage(promiseCtx))})
+					a.maybeCompact(ctx, usage)
+					continue
+				}
+
+				// Gate 2: Claim verification — flag file:line claims
+				// about files that were not actually read this turn.
+				fileRefs := extractFileLineRefs(text)
+				for _, ref := range fileRefs {
+					if !a.evidence.HasSuccessfulBashMentioningPaths([]string{ref.file}) &&
+						!a.evidence.HasSuccessfulWrite([]string{ref.file}) {
+						touched := a.evidence.TouchedPaths(50, false)
+						isRead := false
+						for _, tp := range touched {
+							if tp == ref.file {
+								isRead = true
+								break
+							}
+						}
+						if !isRead && len(fileRefs) > 0 && len(fileRefs) <= 5 {
+							a.sink.Emit(event.Event{Kind: event.Notice, Level: event.LevelWarn,
+								Text: fmt.Sprintf("claim about %s not backed by a file read this turn", ref.String())})
+						}
+					}
+				}
+
 			readiness := a.finalReadinessCheck()
 			if readiness.reason != "" {
 				finalReadinessBlocks++
