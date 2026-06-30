@@ -42,6 +42,7 @@ import (
 	"reasonix/internal/planmode"
 	"reasonix/internal/plugin"
 	"reasonix/internal/provider"
+	"reasonix/internal/provider/openai"
 	"reasonix/internal/sandbox"
 	"reasonix/internal/skill"
 	"reasonix/internal/tool"
@@ -517,6 +518,14 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 		subagentStore.WithDestroyedChecker(jm.IsDestroying)
 	}
 
+	// DeepSeek subagents loop at temperature 0.0 - override to 0.6 (the value
+	// DeepSeek recommends for subagents). Parent turn temperature is unaffected.
+	subagentTemp, tempOverridden := deepSeekSubagentTemperature(entry, cfg.Agent.Temperature)
+	if tempOverridden {
+		sink.Emit(event.Event{Kind: event.Notice, Level: event.LevelInfo,
+			Text: fmt.Sprintf("DeepSeek subagent temperature overridden from %.1f to %.1f (DeepSeek recommends 0.5-0.7 for subagents)", cfg.Agent.Temperature, subagentTemp)})
+	}
+
 	// Permission policy gates every tool call. The headless gate (no Approver)
 	// resolves "ask" to allow — preserving `reasonix run` autonomy — while deny
 	// rules hard-block in every mode. Interactive frontends (chat, desktop) swap
@@ -584,7 +593,7 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 	newTaskTool := func() *agent.TaskTool {
 		return agent.NewTaskTool(execProv, entry.Price, reg, maxSteps,
 			entry.ContextWindow, cfg.Agent.RecentKeep, cfg.Agent.SoftCompactRatio, cfg.Agent.ToolResultSnipRatio, cfg.Agent.CompactRatio, cfg.Agent.CompactForceRatio,
-			cfg.Agent.Temperature, config.ArchiveDir(), "", headlessGate,
+			subagentTemp, config.ArchiveDir(), "", headlessGate,
 			keepPolicy,
 			taskModel, taskEffort, resolveSubagentProvider).
 			WithTranscripts(subagentStore, root, modelName, entry.Effort).
@@ -673,7 +682,7 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 		sysPrompt := agent.DefaultReadOnlyTaskSystemPrompt + "\n\nSkill instructions:\n" + sk.Body
 		return agent.RunSubAgentWithSession(sctx, prov, subReg, agent.NewSession(sysPrompt), task, agent.Options{
 			MaxSteps:            steps,
-			Temperature:         cfg.Agent.Temperature,
+			Temperature:         subagentTemp,
 			Pricing:             price,
 			UsageSource:         event.UsageSourceSubagent,
 			Gate:                headlessGate,
@@ -757,7 +766,7 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 		}
 		answer, err := agent.RunSubAgentWithSession(sctx, prov, subReg, run.Session, task, agent.Options{
 			MaxSteps:          steps,
-			Temperature:       cfg.Agent.Temperature,
+			Temperature:       subagentTemp,
 			Pricing:           price,
 			UsageSource:       event.UsageSourceSubagent,
 			Gate:              headlessGate,
@@ -1741,4 +1750,20 @@ func suggestAPIKeyEnvName(providerName string) string {
 		out = out + "_API_KEY"
 	}
 	return out
+}
+
+// deepSeekSubagentTemperature overrides temperature 0.0 → 0.6 for DeepSeek
+// subagents. DeepSeek recommends 0.5-0.7 for subagent tasks; at 0.0 they
+// can loop infinitely. The parent turn temperature is NOT affected — only
+// subagent construction paths use the returned value.
+//
+// Returns the effective temperature and true when an override was applied.
+func deepSeekSubagentTemperature(e *config.ProviderEntry, configuredTemp float64) (float64, bool) {
+	if configuredTemp != 0.0 {
+		return configuredTemp, false
+	}
+	if !openai.IsDeepSeek(e.BaseURL) {
+		return configuredTemp, false
+	}
+	return 0.6, true
 }

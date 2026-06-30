@@ -3172,3 +3172,47 @@ func TestHelperProcess(t *testing.T) {
 		os.Stdout.Write(append(b, '\n'))
 	}
 }
+
+func TestDeepSeekSubagentTemperature_OverridesWhenZero(t *testing.T) {
+	e := &config.ProviderEntry{BaseURL: "https://api.deepseek.com", Kind: "openai"}
+	temp, overridden := deepSeekSubagentTemperature(e, 0.0)
+	if !overridden {
+		t.Fatal("expected override for DeepSeek at 0.0")
+	}
+	if temp != 0.6 {
+		t.Fatalf("temp = %.1f, want 0.6", temp)
+	}
+}
+
+func TestDeepSeekSubagentTemperature_PassesThroughNonZero(t *testing.T) {
+	e := &config.ProviderEntry{BaseURL: "https://api.deepseek.com", Kind: "openai"}
+	temp, overridden := deepSeekSubagentTemperature(e, 0.7)
+	if overridden {
+		t.Fatal("expected no override when configured temp is non-zero")
+	}
+	if temp != 0.7 {
+		t.Fatalf("temp = %.1f, want 0.7", temp)
+	}
+}
+
+func TestDeepSeekSubagentTemperature_NonDeepSeekUnaffected(t *testing.T) {
+	e := &config.ProviderEntry{BaseURL: "https://api.anthropic.com", Kind: "anthropic"}
+	temp, overridden := deepSeekSubagentTemperature(e, 0.0)
+	if overridden {
+		t.Fatal("expected no override for non-DeepSeek provider")
+	}
+	if temp != 0.0 {
+		t.Fatalf("temp = %.1f, want 0.0", temp)
+	}
+}
+
+func TestDeepSeekSubagentTemperature_OpenAIGatewayUnaffected(t *testing.T) {
+	e := &config.ProviderEntry{BaseURL: "https://api.openai.com", Kind: "openai"}
+	temp, overridden := deepSeekSubagentTemperature(e, 0.0)
+	if overridden {
+		t.Fatal("expected no override for non-DeepSeek openai provider")
+	}
+	if temp != 0.0 {
+		t.Fatalf("temp = %.1f, want 0.0", temp)
+	}
+}
