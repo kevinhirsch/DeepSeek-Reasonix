@@ -7,13 +7,21 @@
   "frontend:dev:watcher": "pnpm dev",
   "frontend:dev:serverUrl": "auto",
   "author": {
-    "name": "esengine"
+    "name": "kevinhirsch"
   },
   "info": {
     "companyName": "Reasonix",
     "productName": "Reasonix",
-    "productVersion": "0.0.0",
+    "productVersion": "2.0.0",
     "copyright": "Copyright © 2026 Reasonix Contributors",
-    "comments": "Reasonix desktop — a Wails shell around the Go kernel."
+    "comments": "Reasonix desktop — DeepSeek-native AI coding agent."
+  },
+  "nsis": {
+    "installDirectory": "$PROGRAMFILES\\Reasonix",
+    "uninstallDisplayName": "Reasonix Desktop",
+    "license": "..\\LICENSE",
+    "createDesktopShortcut": true,
+    "createStartMenuShortcut": true,
+    "shortcutName": "Reasonix"
   }
 }

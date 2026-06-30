@@ -17,11 +17,29 @@ builds:
       - -s -w -X main.version={{ .Tag }}
     goos: [darwin, linux, windows]
     goarch: [amd64, arm64]
+  - id: reasonix-worker
+    main: ./cmd/reasonix-worker
+    binary: reasonix-worker
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+    goos: [darwin, linux, windows]
+    goarch: [amd64, arm64]
 
 archives:
   - id: reasonix
     ids: [reasonix]
     name_template: "reasonix-{{ .Os }}-{{ .Arch }}"
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+  - id: reasonix-worker
+    ids: [reasonix-worker]
+    name_template: "reasonix-worker-{{ .Os }}-{{ .Arch }}"
     formats: [tar.gz]
     format_overrides:
       - goos: windows
@@ -40,15 +58,15 @@ homebrew_casks:
     # longer drags brew along — a stable `v*` cask can ship while npm stays on rc.
     skip_upload: "auto"
     repository:
-      owner: esengine
+      owner: kevinhirsch
       name: homebrew-reasonix
       branch: main
       token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
-    homepage: "https://github.com/esengine/DeepSeek-Reasonix"
+    homepage: "https://github.com/kevinhirsch/DeepSeek-Reasonix"
     description: "Cache-first DeepSeek coding agent for the terminal."
     commit_author:
       name: reasonix
-      email: reasonix@deepseek.com
+      email: kevinhirsch@users.noreply.github.com
     hooks:
       post:
         install: |
