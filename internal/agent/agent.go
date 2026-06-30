@@ -747,6 +747,12 @@ type Options struct {
 	// as read-only. It cannot unlock known blocked tools or unsafe bash commands.
 	PlanModeAllowedTools []string
 
+	// InjectPrompt is prepended to the user task at subagent creation time.
+	// When non-empty, it appears before the user's prompt as the first user
+	// message the subagent sees. Used to inject role-specific prompts for
+	// DeepSeek providers that respond better to user-role instructions.
+	InjectPrompt string
+
 	// MemoryCompiler enables Memory v5 execution trace writeback and cache-safe
 	// execution-contract compilation.
 	MemoryCompiler *memorycompiler.Runtime

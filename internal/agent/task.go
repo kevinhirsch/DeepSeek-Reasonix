@@ -740,8 +740,15 @@ func RunSubAgentWithSession(ctx context.Context, prov provider.Provider, reg *to
 	if sess == nil {
 		return "", fmt.Errorf("sub-agent session is nil")
 	}
+	// When InjectPrompt is set, prepend it as the first user message so the
+	// subagent receives role-specific instructions. DeepSeek providers use this
+	// path because they respond better to user-role than system-role prompts.
+	effectivePrompt := prompt
+	if opts.InjectPrompt != "" {
+		effectivePrompt = opts.InjectPrompt + "\n\n---\n\n" + prompt
+	}
 	sub := New(prov, reg, sess, opts, sink)
-	if err := sub.Run(ctx, prompt); err != nil {
+	if err := sub.Run(ctx, effectivePrompt); err != nil {
 		return "", fmt.Errorf("sub-agent: %w", err)
 	}
 	// Walk the session backwards for the last assistant message with content —

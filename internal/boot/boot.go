@@ -680,6 +680,11 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 			}
 		}
 		sysPrompt := agent.DefaultReadOnlyTaskSystemPrompt + "\n\nSkill instructions:\n" + sk.Body
+			// Inject role-specific prompt for DeepSeek via first user message.
+			injectPrompt := ""
+			if openai.IsDeepSeek(entry.BaseURL) {
+				injectPrompt = agent.RolePrompt(sk.Name, true)
+			}
 		return agent.RunSubAgentWithSession(sctx, prov, subReg, agent.NewSession(sysPrompt), task, agent.Options{
 			MaxSteps:            steps,
 			Temperature:         subagentTemp,
@@ -695,6 +700,7 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 			ArchiveDir:          config.ArchiveDir(),
 			KeepPolicy:          keepPolicy,
 			ReasoningLanguage:   agent.ReasoningLanguageFromContext(sctx),
+				InjectPrompt:        injectPrompt,
 		}, agent.NestedSink(sctx, event.Discard))
 	}
 	// Writer-capable subagent skills reuse the sub-agent machinery via this
@@ -764,6 +770,10 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 				steps = 5
 			}
 		}
+			injectPrompt := ""
+			if openai.IsDeepSeek(entry.BaseURL) {
+				injectPrompt = agent.RolePrompt(sk.Name, true)
+			}
 		answer, err := agent.RunSubAgentWithSession(sctx, prov, subReg, run.Session, task, agent.Options{
 			MaxSteps:          steps,
 			Temperature:       subagentTemp,
@@ -775,6 +785,7 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 			ArchiveDir:        config.ArchiveDir(),
 			KeepPolicy:        keepPolicy,
 			ReasoningLanguage: agent.ReasoningLanguageFromContext(sctx),
+				InjectPrompt:        injectPrompt,
 		}, agent.NestedSink(sctx, event.Discard))
 		if err != nil {
 			return "", errors.Join(err, subagentStore.SaveFailed(run))
