@@ -1,0 +1,50 @@
+{
+  "role": "verifier",
+  "model": "",
+  "passed": 0,
+  "failed": 4,
+  "pass_rate": 0,
+  "results": [
+    {
+      "scenario": "refute-with-evidence",
+      "passed": false,
+      "failures": null,
+      "tokens_in": 0,
+      "tokens_out": 0,
+      "reasoning_tokens": 0,
+      "duration": 0,
+      "transcript": ""
+    },
+    {
+      "scenario": "independent-verification",
+      "passed": false,
+      "failures": null,
+      "tokens_in": 0,
+      "tokens_out": 0,
+      "reasoning_tokens": 0,
+      "duration": 0,
+      "transcript": ""
+    },
+    {
+      "scenario": "default-skepticism",
+      "passed": false,
+      "failures": null,
+      "tokens_in": 0,
+      "tokens_out": 0,
+      "reasoning_tokens": 0,
+      "duration": 0,
+      "transcript": ""
+    },
+    {
+      "scenario": "find-counter-evidence",
+      "passed": false,
+      "failures": null,
+      "tokens_in": 0,
+      "tokens_out": 0,
+      "reasoning_tokens": 0,
+      "duration": 0,
+      "transcript": ""
+    }
+  ],
+  "cost_est": 0
+}

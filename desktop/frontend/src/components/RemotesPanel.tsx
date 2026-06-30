@@ -5,7 +5,6 @@ import {
   useId,
   useMemo,
   useReducer,
-  useRef,
   type FormEvent as ReactFormEvent,
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
@@ -127,7 +126,7 @@ function remotesReducer(state: RemotesState, action: RemotesAction): RemotesStat
       return { ...state, editingId: null, draft: { ...EMPTY_DRAFT } };
     }
     case "cancel_edit":
-      return { ...state, editingId: undefined, draft: { ...EMPTY_DRAFT } };
+      return { ...state, editingId: null, draft: { ...EMPTY_DRAFT } };
     case "update_draft":
       return { ...state, draft: { ...state.draft, ...action.draft } };
     case "set_saving":
@@ -181,18 +180,17 @@ export const RemotesPanel = memo(function RemotesPanel({
     workers: [],
     loading: true,
     error: null,
-    editingId: undefined,
+    editingId: null,
     draft: { ...EMPTY_DRAFT },
     testResult: {},
     testingId: null,
     saving: false,
   });
 
-  const panelId = useId();
   const reducedMotion = usePrefersReducedMotion();
 
-  const isEditing = state.editingId !== undefined;
-  const editingWorker = useMemo(
+  const isEditing = state.editingId !== null;
+  const _editingWorker = useMemo(
     () =>
       state.editingId ? state.workers.find((w) => w.id === state.editingId) : null,
     [state.editingId, state.workers],
@@ -204,7 +202,8 @@ export const RemotesPanel = memo(function RemotesPanel({
     try {
       // Future: app.RemoteWorkers() — Go method not yet wired. Returns an
       // empty list today so the panel renders its empty state gracefully.
-      const bridge = app as Record<string, () => Promise<RemoteWorkerView[]>>;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const bridge = app as unknown as Record<string, () => Promise<RemoteWorkerView[]>>;
       const workers = await (bridge["RemoteWorkers"]?.() ?? []);
       dispatch({ type: "set_workers", workers });
       dispatch({ type: "set_loading", loading: false });
@@ -231,7 +230,7 @@ export const RemotesPanel = memo(function RemotesPanel({
       dispatch({ type: "set_testing", id: workerId });
       try {
         // Future: app.TestRemoteConnection(id) → RemotePingResult
-        const bridge = app as Record<string, (id: string) => Promise<RemotePingResult>>;
+        const bridge = app as unknown as Record<string, (id: string) => Promise<RemotePingResult>>;
         const result = await (bridge["TestRemoteConnection"]?.(workerId) ??
           Promise.resolve({ ok: true, latencyMs: 42 }));
         dispatch({ type: "set_test_result", id: workerId, result });
@@ -253,7 +252,7 @@ export const RemotesPanel = memo(function RemotesPanel({
       e.preventDefault();
       dispatch({ type: "set_saving", saving: true });
       try {
-        const bridge = app as Record<string, (draft: RemoteConfigDraft) => Promise<void>>;
+        const bridge = app as unknown as Record<string, (draft: RemoteConfigDraft) => Promise<void>>;
         if (state.draft.id) {
           await (bridge["UpdateRemoteWorker"]?.(state.draft) ?? Promise.resolve());
         } else {

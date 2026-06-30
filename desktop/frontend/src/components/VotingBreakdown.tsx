@@ -87,7 +87,8 @@ function VoteBar({
   maxPct: number;
   thresholdPct: number;
 }) {
-  const pct = entry.totalVotes > 0 ? (entry.count / entry.totalVotes) * 100 : 0;
+  const tv = entry.totalVotes ?? 0;
+  const pct = tv > 0 ? (entry.count / tv) * 100 : 0;
   const displayPct = pct.toFixed(1);
   const animatedPct = useAnimatedWidth(pct);
   const normalizedMax = Math.max(maxPct, 1);
@@ -120,7 +121,7 @@ function VoteBar({
         <div
           className="absolute top-0 bottom-0 w-0.5 bg-red-400 z-10"
           style={{ left: `${(thresholdPct / normalizedMax) * 100}%` }}
-          title={`${entry.totalVotes > 0 ? entry.totalVotes : 0}%`}
+          title={`${(entry.totalVotes ?? 0) > 0 ? entry.totalVotes : 0}%`}
         />
 
         {/* Count label inside bar */}

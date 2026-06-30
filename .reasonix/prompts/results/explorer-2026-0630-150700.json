@@ -1,0 +1,50 @@
+{
+  "role": "explorer",
+  "model": "",
+  "passed": 0,
+  "failed": 4,
+  "pass_rate": 0,
+  "results": [
+    {
+      "scenario": "find-single-caller",
+      "passed": false,
+      "failures": null,
+      "tokens_in": 0,
+      "tokens_out": 0,
+      "reasoning_tokens": 0,
+      "duration": 0,
+      "transcript": ""
+    },
+    {
+      "scenario": "negative-claim-is-evidenced",
+      "passed": false,
+      "failures": null,
+      "tokens_in": 0,
+      "tokens_out": 0,
+      "reasoning_tokens": 0,
+      "duration": 0,
+      "transcript": ""
+    },
+    {
+      "scenario": "broad-first-search-then-read",
+      "passed": false,
+      "failures": null,
+      "tokens_in": 0,
+      "tokens_out": 0,
+      "reasoning_tokens": 0,
+      "duration": 0,
+      "transcript": ""
+    },
+    {
+      "scenario": "no-narration-between-reads",
+      "passed": false,
+      "failures": null,
+      "tokens_in": 0,
+      "tokens_out": 0,
+      "reasoning_tokens": 0,
+      "duration": 0,
+      "transcript": ""
+    }
+  ],
+  "cost_est": 0
+}

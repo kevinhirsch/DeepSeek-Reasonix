@@ -75,7 +75,7 @@ export function RepoSetupProgress({
   const t = useT();
 
   const [activeStage, setActiveStage] = useState<Stage>("cloning");
-  const [progress, setProgress] = useState(0);
+  const [_progress, setProgress] = useState(0);
   // Percentage display value (0-100) derived from the 0-1 progress float.
   const [pct, setPct] = useState(0);
   const [error, setError] = useState<string | null>(null);
@@ -200,7 +200,7 @@ export function RepoSetupProgress({
                 )}
               </span>
               <span className="repo-setup__stage-label">
-                {t(stage.labelKey)}
+                {t(stage.labelKey as any)}
               </span>
               {stage.key === "detecting" && projectType && isComplete && (
                 <span className="repo-setup__stage-tag">{projectType}</span>

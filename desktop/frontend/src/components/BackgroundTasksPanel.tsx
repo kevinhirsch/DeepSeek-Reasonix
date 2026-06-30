@@ -297,7 +297,7 @@ export const BackgroundTasksPanel = memo(function BackgroundTasksPanel({
         !completedRef.current.has(task.id)
       ) {
         completedRef.current.add(task.id);
-        const timer = setTimeout(() => {
+        setTimeout(() => {
           // The marker lets CSS handle the collapse transition.
           // After 3s the row receives bg-tasks__row--collapsed.
         }, 3000);

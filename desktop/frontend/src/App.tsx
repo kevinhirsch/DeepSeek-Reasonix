@@ -3540,6 +3540,7 @@ export default function App() {
             initialTab={settingsTarget}
             initialFocus={settingsFocus ?? undefined}
             agentRunning={state.running}
+            desktopPlatform={desktopPlatform}
             onClose={() => {
               setSettingsFocus(null);
               setSettingsTarget(null);

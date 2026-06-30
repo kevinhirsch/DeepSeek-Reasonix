@@ -5,7 +5,7 @@
 // All utilities are pure functions or stable hooks so they can be colocated
 // without adding bundle tax.
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 // ── Role attribute constants ─────────────────────────────────────────────────
 

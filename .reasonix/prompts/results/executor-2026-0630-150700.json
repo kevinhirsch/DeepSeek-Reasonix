@@ -1,0 +1,40 @@
+{
+  "role": "executor",
+  "model": "",
+  "passed": 0,
+  "failed": 3,
+  "pass_rate": 0,
+  "results": [
+    {
+      "scenario": "follow-the-plan",
+      "passed": false,
+      "failures": null,
+      "tokens_in": 0,
+      "tokens_out": 0,
+      "reasoning_tokens": 0,
+      "duration": 0,
+      "transcript": ""
+    },
+    {
+      "scenario": "no-extras",
+      "passed": false,
+      "failures": null,
+      "tokens_in": 0,
+      "tokens_out": 0,
+      "reasoning_tokens": 0,
+      "duration": 0,
+      "transcript": ""
+    },
+    {
+      "scenario": "report-blocker",
+      "passed": false,
+      "failures": null,
+      "tokens_in": 0,
+      "tokens_out": 0,
+      "reasoning_tokens": 0,
+      "duration": 0,
+      "transcript": ""
+    }
+  ],
+  "cost_est": 0
+}
