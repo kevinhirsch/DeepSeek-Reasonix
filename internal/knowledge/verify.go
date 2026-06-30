@@ -268,9 +268,9 @@ func baseName(path string) string {
 
 // --- semantic dedup helpers shared with eviction.go ---
 
-// keywordOverlap returns the Jaccard similarity of two entries' combined question
+// entryKeywordOverlap returns the Jaccard similarity of two entries' combined question
 // and answer text. A value > 0.8 is considered a semantic duplicate.
-func keywordOverlap(a, b *Entry) float64 {
+func entryKeywordOverlap(a, b *Entry) float64 {
 	textA := strings.ToLower(a.Question + " " + a.Answer)
 	textB := strings.ToLower(b.Question + " " + b.Answer)
 	return jaccardKeywordOverlap(textA, textB)
