@@ -1,0 +1,17 @@
+=== Upstream Harvest Inventory (2026-06-30) ===
+
+Harvested (11 PRs, 2 commits):
+  dd66dc92: #5461 #5564 #5589 #5643 #5660
+  0ebba5f8: #4864 #5055 #5105 #5212 #5362 #5415
+
+Already in base (2 PRs):
+  #5452 #5648
+
+Pending (4 PRs):
+  #5276 → Issue #7   #5299 → Issue #18
+  #5405 → Issue #6   #4881 → Issue #20
+
+Rejected (8 PRs):
+  #3733 #4516 #4518 #4841 #4844 #4880 #5089 #5616
+
+See .github/harvesting.md for full details and rationale.
