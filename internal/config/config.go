@@ -59,6 +59,7 @@ type Config struct {
 	LSP              LSPConfig           `toml:"lsp"`
 	Bot              BotConfig           `toml:"bot"`
 	Serve            ServeConfig         `toml:"serve"`
+	Repos            ReposConfig         `toml:"repos"`
 
 	providerSources          map[string]providerSourceScope
 	shadowedProjectProviders []ProviderEntry
@@ -593,6 +594,13 @@ type ServeConfig struct {
 	// rate-limiting and Secure-cookie decisions. When false (default), they
 	// are ignored — an attacker can otherwise forge them.
 	BehindProxy bool `toml:"behind_proxy"`
+}
+
+// ReposConfig controls git repository discovery and auto-setup behavior.
+type ReposConfig struct {
+	// CloneRoot is the directory where cloned repos are stored.
+	// Default: ~/reasonix-projects/
+	CloneRoot string `toml:"clone_root"`
 }
 
 // NetworkConfig controls ordinary outbound HTTP traffic such as model providers,
